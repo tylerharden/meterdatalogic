@@ -14,12 +14,19 @@ def summarize(df: pd.DataFrame) -> types.SummaryPayload:
     totals = df.groupby("flow")["kwh"].sum().to_dict()
     per_day_avg = (sum(totals.values()) / days) if days else 0.0
 
-    # peaks
-    max_row = df.loc[df["kwh"].idxmax()] if len(df) else None
+    if len(df):
+        pos = int(df["kwh"].to_numpy().argmax())
+        max_interval_kwh = float(df["kwh"].iloc[pos])
+        max_interval_time = df.index[pos].isoformat()
+    else:
+        max_interval_kwh = 0.0
+        max_interval_time = None
+
     peaks = {
-        "max_interval_kwh": float(max_row["kwh"]) if max_row is not None else 0.0,
-        "max_interval_time": str(df["kwh"].idxmax()) if len(df) else None,
+        "max_interval_kwh": max_interval_kwh,
+        "max_interval_time": max_interval_time,
     }
+
 
     # profile24 & months
     prof = profile24(df)
