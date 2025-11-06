@@ -1,5 +1,6 @@
 import meterdatalogic as ml
-from meterdatalogic.scenario import _collapse_flows
+from meterdatalogic.utils import _collapse_flows
+
 
 def test_collapse_flows_handles_filtered_frames(canon_df_mixed_flows):
     df = ml.ingest.from_dataframe(canon_df_mixed_flows)

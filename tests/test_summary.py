@@ -1,9 +1,15 @@
 import meterdatalogic as ml
 
+
 def test_summary_payload_structure(canon_df_mixed_flows):
-    df = ml.ingest.from_dataframe(canon_df_mixed_flows)
-    payload = ml.summary.summarize(df)
-    assert "meta" in payload and "energy" in payload and "profile24" in payload and "months" in payload
+    df = ml.ingest.from_dataframe(canon_df_mixed_flows, nmi=1234567890)
+    payload = ml.summary.summarise(df)
+    assert (
+        "meta" in payload
+        and "energy" in payload
+        and "profile24" in payload
+        and "months" in payload
+    )
     assert payload["meta"]["cadence_min"] == 30
     assert payload["meta"]["nmis"] == 1
     # energy keys for flows present
