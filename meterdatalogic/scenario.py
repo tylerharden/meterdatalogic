@@ -1,117 +1,68 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Literal, Optional, Dict, Any
+from typing import Optional
 import numpy as np
 import pandas as pd
+from .types import EVConfig, PVConfig, BatteryConfig, ScenarioResult, Plan
+from . import utils, validate, pricing, canon
 
-from . import canon, validate, pricing, types as ml_types
-from .types import EVConfig, PVConfig, BatteryConfig, ScenarioResult
-
-def _interval_hours(df: pd.DataFrame) -> float:
-    cmin = int(df["cadence_min"].iloc[0]) if len(df) else canon.DEFAULT_CADENCE_MIN
-    return cmin / 60.0
-
-def _collapse_flows(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-    """
-    Return (import_series_kwh, export_series_kwh) summed per interval.
-    Robust to subsets and flow naming like 'grid_export_solar' / 'grid_import'.
-    """
-    idx_full = df.index  # full timeline
-    flows = df["flow"].astype(str)
-
-    # Filter first, then groupby(level=0) so lengths match
-    df_imp = df.loc[flows.str.contains("import", na=False)]
-    df_exp = df.loc[flows.str.contains("export", na=False)]
-
-    imp = df_imp.groupby(level=0)["kwh"].sum() if not df_imp.empty else pd.Series(dtype=float)
-    exp = df_exp.groupby(level=0)["kwh"].sum() if not df_exp.empty else pd.Series(dtype=float)
-
-    # Reindex to full index to avoid NA and preserve timeline
-    imp = imp.reindex(idx_full, fill_value=0.0).sort_index()
-    exp = exp.reindex(idx_full, fill_value=0.0).sort_index()
-    return imp, exp
-
-def _mask_days(idx: pd.DatetimeIndex, days: Literal["ALL","MF","MS"]) -> np.ndarray:
-    if days == "ALL":
-        return np.ones(len(idx), dtype=bool)
-    dow = idx.dayofweek  # Mon=0..Sun=6
-    if days == "MF":
-        return (dow <= 4).to_numpy()
-    if days == "MS":
-        return (dow <= 5).to_numpy()
-    return np.ones(len(idx), dtype=bool)
-
-def _time_in_range(times: np.ndarray, start: pd.Timestamp, end: pd.Timestamp) -> np.ndarray:
-    """Times are datetime.time; inclusive of start, exclusive of end; handles wrap midnight."""
-    s = start.time(); e = end.time()
-    if s < e:
-        return (times >= s) & (times < e)
-    else:
-        return (times >= s) | (times < e)
-
-def _parse_time(s: str) -> pd.Timestamp:
-    return pd.to_datetime("00:00" if s == "24:00" else s, format="%H:%M")
-
-# ---------- EV ----------
 
 def apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Series:
     """Return per-interval kWh EV charging."""
     if ev is None or ev.daily_kwh <= 0 or ev.max_kw <= 0:
-        return pd.Series(0.0, index=idx)
+        return pd.Series(0.0, index=idx, name="ev_charge_kwh")
 
-    times = idx.tz_convert(idx.tz).time
-    day_mask = _mask_days(idx, ev.days)
-    start_t = _parse_time(ev.window_start)
-    end_t = _parse_time(ev.window_end)
-    win_mask = _time_in_range(times, start_t, end_t)
+    # Local wall times; idx is already tz-aware from ingest
+    times = pd.Series(idx.time, index=idx)
+    day_mask = utils._mask_days(idx, ev.days)
+
+    start_t = utils._parse_hhmm(ev.window_start).time()
+    end_t = utils._parse_hhmm(ev.window_end).time()
+    win_mask = utils._time_in_range(times, start_t, end_t).to_numpy()
 
     per_int_limit = ev.max_kw * interval_h
     kwh = np.zeros(len(idx), dtype=float)
 
+    # Group by day (date) and fill per the chosen strategy
+    dates = idx.date
+    unique_days = np.unique(dates)
+
     if ev.strategy == "immediate":
-        # Fill window from start until daily energy met, each day independently
-        df = pd.DataFrame(index=idx)
-        df["date"] = df.index.date
-        df["in_window"] = win_mask
-        df["day_ok"] = day_mask
-        for d, g in df.groupby("date", sort=False):
-            if not g["day_ok"].any():
-                continue
-            mask = (g["in_window"] & g["day_ok"]).to_numpy()
+        # Fill window from the start each eligible day until daily_kwh is met
+        for d in unique_days:
+            mask = (dates == d) & day_mask & win_mask
             if not mask.any():
                 continue
             need = ev.daily_kwh
-            for pos in np.where(mask)[0]:
-                take = min(per_int_limit, need)
-                kwh[g.index[pos] == idx] = take
-                need -= take
-                if need <= 1e-9:
+            positions = np.flatnonzero(mask)
+            for p in positions:
+                if need <= 1e-12:
                     break
+                take = min(per_int_limit, need)
+                kwh[p] = take
+                need -= take
 
     elif ev.strategy == "scheduled":
-        # Evenly spread across all allowed intervals that day
-        df = pd.DataFrame(index=idx)
-        df["date"] = df.index.date
-        df["in_window"] = win_mask
-        df["day_ok"] = day_mask
-        for d, g in df.groupby("date", sort=False):
-            mask = (g["in_window"] & g["day_ok"]).to_numpy()
-            n = mask.sum()
+        # Evenly spread the daily_kwh across all allowed intervals that day
+        for d in unique_days:
+            mask = (dates == d) & day_mask & win_mask
+            n = int(mask.sum())
             if n == 0:
                 continue
             per = min(per_int_limit, ev.daily_kwh / n)
-            kwh[np.where(mask)[0] + (g.index[0] == idx[0]) * 0] += per
+            kwh[mask] += per
+
+    else:
+        # Unknown strategy → no-op (or raise if preferred)
+        pass
 
     return pd.Series(kwh, index=idx, name="ev_charge_kwh")
 
-# ---------- PV ----------
 
 def apply_pv(idx: pd.DatetimeIndex, pv: PVConfig, interval_h: float) -> pd.Series:
     """Return per-interval kWh PV generation at the meter (after losses & inverter clip)."""
     if pv is None or pv.system_kwp <= 0 or pv.inverter_kw <= 0:
         return pd.Series(0.0, index=idx, name="pv_kwh")
 
-    # Import lazy to avoid circular import
     from .profiles import normalized_pv_shape
 
     base = normalized_pv_shape(idx)  # 0..1, midday peak ~1
@@ -128,7 +79,6 @@ def apply_pv(idx: pd.DatetimeIndex, pv: PVConfig, interval_h: float) -> pd.Serie
     kwh = kw_ac * interval_h
     return pd.Series(kwh, index=idx, name="pv_kwh")
 
-# ---------- Battery (self_consume MVP) ----------
 
 def apply_battery_self_consume(
     import_prebat: np.ndarray,
@@ -186,7 +136,6 @@ def apply_battery_self_consume(
 
     return discharge, charge, soc
 
-# ---------- Orchestrator ----------
 
 def run(
     df: pd.DataFrame,
@@ -194,7 +143,7 @@ def run(
     ev: Optional[EVConfig] = None,
     pv: Optional[PVConfig] = None,
     battery: Optional[BatteryConfig] = None,
-    plan: Optional[ml_types.Plan] = None,
+    plan: Optional[Plan] = None,
 ) -> ScenarioResult:
     """
     Simulate EV, PV, and Battery against baseline load at the input cadence (canon in → canon out).
@@ -203,9 +152,9 @@ def run(
     validate.assert_canon(df)
 
     # Baseline import/export series
-    s_import0, s_export0 = _collapse_flows(df)
+    s_import0, s_export0 = utils._collapse_flows(df)
     idx = s_import0.index
-    interval_h = _interval_hours(df)
+    interval_h = utils._interval_hours(df)
 
     # 1) EV charging adds to local load
     ev_series = apply_ev(idx, ev, interval_h) if ev else pd.Series(0.0, index=idx)
@@ -239,10 +188,26 @@ def run(
     records = []
     for ts, val in s_import_after.items():
         if val > 0:
-            records.append({"t_start": ts, "nmi": df["nmi"].iloc[0], "channel": "E1", "flow": "grid_import", "kwh": float(val)})
+            records.append(
+                {
+                    "t_start": ts,
+                    "nmi": df["nmi"].iloc[0],
+                    "channel": "E1",
+                    "flow": "grid_import",
+                    "kwh": float(val),
+                }
+            )
     for ts, val in s_export_after.items():
         if val > 0:
-            records.append({"t_start": ts, "nmi": df["nmi"].iloc[0], "channel": "B1", "flow": "grid_export_solar", "kwh": float(val)})
+            records.append(
+                {
+                    "t_start": ts,
+                    "nmi": df["nmi"].iloc[0],
+                    "channel": "B1",
+                    "flow": "grid_export_solar",
+                    "kwh": float(val),
+                }
+            )
 
     df_after = pd.DataFrame.from_records(records).set_index("t_start")
     if len(df_after):
@@ -251,12 +216,14 @@ def run(
         df_after = df_after.sort_index()
     else:
         # empty but canon-shaped
-        df_after = pd.DataFrame(columns=canon.REQUIRED_COLS).set_index(pd.DatetimeIndex([], tz=df.index.tz, name=canon.INDEX_NAME))
+        df_after = pd.DataFrame(columns=canon.REQUIRED_COLS).set_index(
+            pd.DatetimeIndex([], tz=df.index.tz, name=canon.INDEX_NAME)
+        )
     validate.assert_canon(df_after)
 
     # Summaries
-    summary_before = __import__("meterdatalogic").summary.summarize(df)
-    summary_after = __import__("meterdatalogic").summary.summarize(df_after)
+    summary_before = __import__("meterdatalogic").summary.summarise(df)
+    summary_after = __import__("meterdatalogic").summary.summarise(df_after)
 
     # Costs
     cost_before = cost_after = None
@@ -266,7 +233,11 @@ def run(
 
     # Deltas & explainables
     kwh_before = df.groupby("flow")["kwh"].sum()
-    kwh_after = df_after.groupby("flow")["kwh"].sum() if len(df_after) else pd.Series(dtype=float)
+    kwh_after = (
+        df_after.groupby("flow")["kwh"].sum()
+        if len(df_after)
+        else pd.Series(dtype=float)
+    )
     import_b = float(kwh_before.get("grid_import", 0.0))
     export_b = float(kwh_before.get("grid_export_solar", 0.0))
     import_a = float(kwh_after.get("grid_import", 0.0))
@@ -275,7 +246,11 @@ def run(
         "import_kwh_delta": import_a - import_b,
         "export_kwh_delta": export_a - export_b,
         "total_kwh_delta": (import_a + export_a) - (import_b + export_b),
-        "cost_total_delta": float(cost_after["total"].sum() - cost_before["total"].sum()) if (cost_before is not None and cost_after is not None) else None,
+        "cost_total_delta": (
+            float(cost_after["total"].sum() - cost_before["total"].sum())
+            if (cost_before is not None and cost_after is not None)
+            else None
+        ),
     }
 
     explain = {
@@ -283,8 +258,14 @@ def run(
         "pv_kwh": float(pv_series.sum()) if pv else 0.0,
         "battery_discharge_kwh": float(np.sum(bat_dis)),
         "battery_charge_kwh": float(np.sum(bat_ch)),
-        "battery_cycles_est": float(np.sum(bat_dis) / max(battery.capacity_kwh, 1e-6)) if battery else 0.0,
-        "pv_self_consumption_pct": float(100.0 * np.sum(used_by_load) / max(pv_series.sum(), 1e-9)) if pv and pv_series.sum() > 0 else None,
+        "battery_cycles_est": (
+            float(np.sum(bat_dis) / max(battery.capacity_kwh, 1e-6)) if battery else 0.0
+        ),
+        "pv_self_consumption_pct": (
+            float(100.0 * np.sum(used_by_load) / max(pv_series.sum(), 1e-9))
+            if pv and pv_series.sum() > 0
+            else None
+        ),
     }
 
     return ScenarioResult(

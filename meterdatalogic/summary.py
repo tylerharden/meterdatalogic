@@ -2,13 +2,18 @@ from __future__ import annotations
 import pandas as pd
 from . import types, canon
 from .transform import profile24, groupby_month
+from .utils import _infer_minutes_from_index
 
-def summarize(df: pd.DataFrame) -> types.SummaryPayload:
+
+def summarise(df: pd.DataFrame) -> types.SummaryPayload:
     idx = df.index
     start = idx.min()
     end = idx.max()
     days = int((end - start).days) + 1 if pd.notna(start) and pd.notna(end) else 0
-    cadence = int(df["cadence_min"].iloc[0]) if len(df) else canon.DEFAULT_CADENCE_MIN
+
+    # Prefer inference from the index (works even if df has multiple flows/channels)
+    cadence = _infer_minutes_from_index(idx, default=canon.DEFAULT_CADENCE_MIN)
+    cadence = int(cadence)
 
     # totals by flow
     totals = df.groupby("flow")["kwh"].sum().to_dict()
@@ -27,8 +32,6 @@ def summarize(df: pd.DataFrame) -> types.SummaryPayload:
         "max_interval_time": max_interval_time,
     }
 
-
-    # profile24 & months
     prof = profile24(df)
     months = groupby_month(df).to_dict(orient="records")
 
@@ -39,6 +42,10 @@ def summarize(df: pd.DataFrame) -> types.SummaryPayload:
             "end": end.isoformat() if pd.notna(end) else "",
             "cadence_min": cadence,
             "days": days,
+            "channels": (
+                sorted(df["channel"].unique()) if "channel" in df.columns else []
+            ),
+            "flows": sorted(df["flow"].unique()) if "flow" in df.columns else [],
         },
         "energy": {k: float(v) for k, v in totals.items()},
         "per_day_avg_kwh": float(per_day_avg),
