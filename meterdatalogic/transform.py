@@ -1,10 +1,13 @@
 from __future__ import annotations
 import pandas as pd
 from typing import Literal, Iterable
-from . import canon, utils
+
+from . import utils
 
 
-def filter_range(df: pd.DataFrame, start=None, end=None) -> pd.DataFrame:
+def filter_range(
+    df: pd.DataFrame, start: pd.DatetimeIndex = None, end: pd.DatetimeIndex = None
+) -> pd.DataFrame:
     return df.loc[start:end] if start or end else df
 
 
@@ -73,9 +76,9 @@ def tou_bins(df: pd.DataFrame, bands: Iterable[dict]) -> pd.DataFrame:
 
     assigned = pd.Series(index=s.index, dtype="object")
     for band in bands:
-        start = utils._parse_time_str(band["start"])
-        end = utils._parse_time_str(band["end"])
-        mask = utils._time_in_range(times, start, end)
+        start = utils.parse_time_str(band["start"])
+        end = utils.parse_time_str(band["end"])
+        mask = utils.time_in_range(times, start, end)
         assigned[mask] = band["name"]
 
     s["band"] = assigned.fillna("unassigned")
@@ -105,7 +108,7 @@ def demand_window(
         daymask = dayofweek <= 5
     start_t = pd.to_datetime(start).time()
     end_t = pd.to_datetime(end).time()
-    timemask = utils._time_in_range(t.time, start_t, end_t)
+    timemask = utils.time_in_range(t.time, start_t, end_t)
     s = s[daymask & timemask & (s["flow"] == "grid_import")]
     # Convert half-hour kWh → kW estimate: kWh * (60 / cadence)
     factor = 60 / s["cadence_min"].astype(float)

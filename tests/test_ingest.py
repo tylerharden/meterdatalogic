@@ -1,20 +1,21 @@
 import pandas as pd
-import meterdatalogic as ml
+
+from meterdatalogic import ingest, validate, canon
 
 TZ = "Australia/Brisbane"
 
 
 def test_from_dataframe_produces_canon(canon_df_one_nmi):
-    out = ml.ingest.from_dataframe(canon_df_one_nmi, tz=TZ)
-    ml.validate.assert_canon(out)
+    out = ingest.from_dataframe(canon_df_one_nmi, tz=TZ)
+    validate.assert_canon(out)
     assert out.index.tz is not None
-    assert out.index.name == ml.canon.INDEX_NAME
+    assert out.index.name == canon.INDEX_NAME
     assert set(["nmi", "channel", "flow", "kwh", "cadence_min"]).issubset(out.columns)
     assert (out["kwh"] >= 0).all()
 
 
 def test_from_dataframe_infers_cadence(canon_df_one_nmi):
-    out = ml.ingest.from_dataframe(
+    out = ingest.from_dataframe(
         canon_df_one_nmi.drop(columns=[], errors="ignore"), tz=TZ
     )
     assert out["cadence_min"].iloc[0] == 30  # 30min cadence inferred
@@ -30,7 +31,7 @@ def test_from_dataframe_renames_columns_and_localizes():
             "energy": [0.25, 0.25, 0.25, 0.25],
         }
     )
-    out = ml.ingest.from_dataframe(df, tz=TZ)
+    out = ingest.from_dataframe(df, tz=TZ)
     assert out.index.tz is not None
     assert "kwh" in out.columns
     assert out["kwh"].sum() == 1.0
@@ -55,10 +56,10 @@ def test_from_nem12_monkeypatched(monkeypatch):
                 }
             )
 
-    monkeypatch.setattr(ml.ingest, "NEMFile", FauxNEMFile)
+    monkeypatch.setattr(ingest, "NEMFile", FauxNEMFile)
 
-    out = ml.ingest.from_nem12("fake.csv", tz=TZ)
-    ml.validate.assert_canon(out)
+    out = ingest.from_nem12("fake.csv", tz=TZ)
+    validate.assert_canon(out)
     # kwh made positive; flow encodes direction
     assert (out["kwh"] >= 0).all()
     assert {"grid_import", "grid_export_solar"}.issubset(set(out["flow"].unique()))

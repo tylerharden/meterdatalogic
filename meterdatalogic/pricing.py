@@ -1,12 +1,10 @@
-# pricing.py
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from typing import Iterable, Tuple
+
 from .types import Plan
 from . import transform, utils
-
-# ------------------ utilities ------------------
 
 
 def _tznorm(ts, tz):
@@ -63,13 +61,13 @@ def _label_cycles(
 # ------------------ billables over cycles ------------------
 
 
-def cycle_billables(
+def _cycle_billables(
     df: pd.DataFrame,
     plan: Plan,
     cycles: Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]],
 ) -> pd.DataFrame:
     """
-    One row per cycle with the same billable columns your monthly pipeline expects:
+    One row per cycle:
       ['cycle', <band columns>, 'export_kwh', 'demand_kw', 'days_in_cycle']
     """
     # attach labels
@@ -146,9 +144,6 @@ def cycle_billables(
     return out
 
 
-# ------------------ pricing over cycles ------------------
-
-
 def estimate_cycle_costs(
     df: pd.DataFrame,
     plan: Plan,
@@ -157,7 +152,7 @@ def estimate_cycle_costs(
     include_gst: bool = False,
     gst_rate: float = 0.10,
 ) -> pd.DataFrame:
-    bill = cycle_billables(df, plan, cycles)
+    bill = _cycle_billables(df, plan, cycles)
 
     # Energy across all usage bands your tou emitted (names must match ToUBand.name)
     energy = 0.0

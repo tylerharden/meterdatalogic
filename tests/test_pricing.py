@@ -5,10 +5,11 @@
 - test_pricing_estimate_monthly_cost: full plan smoke with all components present.
 """
 
-import meterdatalogic.types as mdtypes
 import pandas as pd
 import numpy as np
+
 from meterdatalogic import pricing, utils, ingest
+import meterdatalogic.types as mdtypes
 
 
 def _mk_io_week(idx):
