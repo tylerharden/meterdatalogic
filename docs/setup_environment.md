@@ -1,6 +1,6 @@
-# Setting up and Developing the `meterlogic` Package
+# Setting up and Developing the `meterdatalogic` Package
 
-This guide explains how to **set up, install, and develop** the `meterlogic` package locally in VS Code or any IDE using a virtual environment and pytest.
+This guide explains how to **set up, install, and develop** the `meterdatalogic` package locally in VS Code or any IDE using a virtual environment and pytest.
 
 ---
 
