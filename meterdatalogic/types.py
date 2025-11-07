@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import TypedDict, Literal, List, Dict, Optional
 from dataclasses import dataclass
 import pandas as pd
-from numpy import float64
 
 Flow = Literal["grid_import", "controlled_load_import", "grid_export_solar"]
 

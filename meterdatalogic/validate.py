@@ -1,7 +1,8 @@
 from __future__ import annotations
 import pandas as pd
-from . import canon, utils, exceptions
 from typing import Optional
+
+from . import canon, exceptions
 
 
 def assert_canon(df: pd.DataFrame) -> None:
@@ -18,17 +19,6 @@ def assert_canon(df: pd.DataFrame) -> None:
         raise exceptions.CanonError(
             "Negative kWh values detected; energy should be non-negative."
         )
-
-
-def dedupe(df: pd.DataFrame) -> pd.DataFrame:
-    return df[~df.index.duplicated(keep="first")].copy()
-
-
-def ensure(df: pd.DataFrame, tz: str = canon.DEFAULT_TZ) -> pd.DataFrame:
-    df = df.sort_index()
-    df = utils._ensure_tz_aware_index(df, tz)
-    assert_canon(df)
-    return df
 
 
 def validate_nmi(df: pd.DataFrame, nmi: Optional[int] = None) -> pd.DataFrame:

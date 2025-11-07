@@ -1,5 +1,8 @@
-import meterdatalogic as ml
+"""Tests for summary feature."""
+
 import pandas as pd
+
+import meterdatalogic as ml
 
 
 def test_summary_payload_structure(canon_df_mixed_flows):

@@ -1,18 +1,18 @@
 from __future__ import annotations
 import pandas as pd
-from . import types, canon
-from .transform import profile24, groupby_month
-from .utils import _infer_minutes_from_index
+
+from . import canon, utils, transform
+from .types import SummaryPayload
 
 
-def summarise(df: pd.DataFrame) -> types.SummaryPayload:
+def summarise(df: pd.DataFrame) -> SummaryPayload:
     idx = df.index
     start = idx.min()
     end = idx.max()
     days = int((end - start).days) + 1 if pd.notna(start) and pd.notna(end) else 0
 
     # Prefer inference from the index (works even if df has multiple flows/channels)
-    cadence = _infer_minutes_from_index(idx, default=canon.DEFAULT_CADENCE_MIN)
+    cadence = utils.infer_minutes_from_index(idx, default=canon.DEFAULT_CADENCE_MIN)
     cadence = int(cadence)
 
     # totals by flow
@@ -32,10 +32,10 @@ def summarise(df: pd.DataFrame) -> types.SummaryPayload:
         "max_interval_time": max_interval_time,
     }
 
-    prof = profile24(df)
-    months = groupby_month(df).to_dict(orient="records")
+    prof = transform.profile24(df)
+    months = transform.groupby_month(df).to_dict(orient="records")
 
-    payload: types.SummaryPayload = {
+    payload: SummaryPayload = {
         "meta": {
             "nmis": int(df["nmi"].nunique()) if "nmi" in df.columns else 0,
             "start": start.isoformat() if pd.notna(start) else "",

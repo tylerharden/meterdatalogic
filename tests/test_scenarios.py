@@ -52,14 +52,14 @@ def test_apply_ev_immediate_window_and_limits(day_30min):
         strategy="immediate",
     )
     try:
-        s = scenario.apply_ev(idx, cfg, interval_h=0.5)
+        s = scenario._apply_ev(idx, cfg, interval_h=0.5)
     except NotImplementedError:
-        pytest.xfail("apply_ev not implemented")
+        pytest.xfail("_apply_ev not implemented")
 
     assert isinstance(s, pd.Series) and len(s) == len(idx)
     # Only inside [18:00,22:00)
     times = pd.Series(idx.time, index=idx)
-    in_win = utils._time_in_range(
+    in_win = utils.time_in_range(
         times,
         pd.Timestamp("2000-01-01 18:00").time(),
         pd.Timestamp("2000-01-01 22:00").time(),
@@ -83,9 +83,9 @@ def test_apply_pv_basic_contract(day_30min):
     """
     cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     try:
-        s = scenario.apply_pv(day_30min, cfg, interval_h=0.5)
+        s = scenario._apply_pv(day_30min, cfg, interval_h=0.5)
     except NotImplementedError:
-        pytest.xfail("apply_pv not implemented")
+        pytest.xfail("_apply_pv not implemented")
 
     assert isinstance(s, pd.Series) and len(s) == len(day_30min)
     assert s.dtype.kind in "fc"
@@ -114,11 +114,11 @@ def test_battery_self_consume_contract():
     )
 
     try:
-        discharge, charge, soc = scenario.apply_battery_self_consume(
+        discharge, charge, soc = scenario._apply_battery_self_consume(
             import_prebat, pv_excess_prebat, cfg, interval_h
         )
     except NotImplementedError:
-        pytest.xfail("apply_battery_self_consume not implemented")
+        pytest.xfail("_apply_battery_self_consume not implemented")
 
     assert discharge.shape == charge.shape == soc.shape == (n,)
     assert (discharge >= -1e-12).all() and (charge >= -1e-12).all()
@@ -130,7 +130,7 @@ def test_battery_self_consume_contract():
 def test_run_wires_components_and_prices(day_30min, monkeypatch):
     """Input:
     - df_before: import-only 0.5 kWh/slot via utils.build_canon_frame.
-    - Monkeypatched scenario.apply_ev/pv/battery to deterministic outputs.
+    - Monkeypatched scenario._apply_ev/pv/battery to deterministic outputs.
     - Plan provided; pricing.estimate_monthly_cost monkeypatched to stub.
     Exercise:
     - run() orchestration and cost calculation path.
@@ -166,9 +166,11 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
         dis[30:32] = 0.1
         return dis, ch, soc
 
-    monkeypatch.setattr(scenario, "apply_ev", fake_ev, raising=True)
-    monkeypatch.setattr(scenario, "apply_pv", fake_pv, raising=True)
-    monkeypatch.setattr(scenario, "apply_battery_self_consume", fake_batt, raising=True)
+    monkeypatch.setattr(scenario, "_apply_ev", fake_ev, raising=True)
+    monkeypatch.setattr(scenario, "_apply_pv", fake_pv, raising=True)
+    monkeypatch.setattr(
+        scenario, "_apply_battery_self_consume", fake_batt, raising=True
+    )
 
     called = {"pricing": False}
 

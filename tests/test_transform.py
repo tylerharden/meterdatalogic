@@ -1,6 +1,7 @@
 """Tests for demand windows, grouping, and profiles in transform."""
 
 import pandas as pd
+
 import meterdatalogic.transform as transform
 import meterdatalogic.ingest as ingest
 

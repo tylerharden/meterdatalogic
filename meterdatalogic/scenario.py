@@ -1,23 +1,88 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Literal
 import numpy as np
 import pandas as pd
+
 from .types import EVConfig, PVConfig, BatteryConfig, ScenarioResult, Plan
 from . import utils, validate, pricing, canon
 
 
-def apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Series:
+def _mask_days(idx: pd.DatetimeIndex, days: Literal["ALL", "MF", "MS"]) -> np.ndarray:
+    if days == "ALL":
+        return np.ones(len(idx), dtype=bool)
+    dow = idx.dayofweek  # Mon=0..Sun=6
+    if days == "MF":
+        return (dow <= 4).to_numpy()
+    if days == "MS":
+        return (dow <= 5).to_numpy()
+    return np.ones(len(idx), dtype=bool)
+
+
+def _collapse_flows(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """
+    Return (import_series_kwh, export_series_kwh) summed per interval.
+    Robust to subsets and flow naming like 'grid_export_solar' / 'grid_import'.
+    """
+    idx_full = df.index  # full timeline
+    flows = df["flow"].astype(str)
+
+    # Filter first, then groupby(level=0) so lengths match
+    df_imp = df.loc[flows.str.contains("import", na=False)]
+    df_exp = df.loc[flows.str.contains("export", na=False)]
+
+    imp = (
+        df_imp.groupby(level=0)["kwh"].sum()
+        if not df_imp.empty
+        else pd.Series(dtype=float)
+    )
+    exp = (
+        df_exp.groupby(level=0)["kwh"].sum()
+        if not df_exp.empty
+        else pd.Series(dtype=float)
+    )
+
+    # Reindex to full index to avoid NA and preserve timeline
+    imp = imp.reindex(idx_full, fill_value=0.0).sort_index()
+    exp = exp.reindex(idx_full, fill_value=0.0).sort_index()
+    return imp, exp
+
+
+def _normalised_pv_shape(idx: pd.DatetimeIndex) -> np.ndarray:
+    """
+    Normalised PV power shape (0..1) using local wall time.
+    Daylight window 06:00–18:00; peak ≈ 12:00.
+    """
+    if idx.tz is None:
+        raise ValueError("Index must be timezone-aware for accurate PV alignment.")
+
+    # Local wall time (tz-aware index already local)
+    local = idx
+
+    hour = local.hour.to_numpy(dtype=float)
+    minute = local.minute.to_numpy(dtype=float)
+    hours = hour + minute / 60.0
+
+    x = (hours - 6.0) / 12.0 * np.pi
+    x = np.clip(x, 0.0, np.pi)
+    shape = np.sin(x) ** 1.2
+
+    night = (hours < 6.0) | (hours > 18.0)
+    shape[night] = 0.0
+    return shape
+
+
+def _apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Series:
     """Return per-interval kWh EV charging."""
     if ev is None or ev.daily_kwh <= 0 or ev.max_kw <= 0:
         return pd.Series(0.0, index=idx, name="ev_charge_kwh")
 
     # Local wall times; idx is already tz-aware from ingest
     times = pd.Series(idx.time, index=idx)
-    day_mask = utils._mask_days(idx, ev.days)
+    day_mask = _mask_days(idx, ev.days)
 
-    start_t = utils._parse_hhmm(ev.window_start).time()
-    end_t = utils._parse_hhmm(ev.window_end).time()
-    win_mask = utils._time_in_range(times, start_t, end_t).to_numpy()
+    start_t = utils.parse_hhmm(ev.window_start).time()
+    end_t = utils.parse_hhmm(ev.window_end).time()
+    win_mask = utils.time_in_range(times, start_t, end_t).to_numpy()
 
     per_int_limit = ev.max_kw * interval_h
     kwh = np.zeros(len(idx), dtype=float)
@@ -58,14 +123,12 @@ def apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Serie
     return pd.Series(kwh, index=idx, name="ev_charge_kwh")
 
 
-def apply_pv(idx: pd.DatetimeIndex, pv: PVConfig, interval_h: float) -> pd.Series:
+def _apply_pv(idx: pd.DatetimeIndex, pv: PVConfig, interval_h: float) -> pd.Series:
     """Return per-interval kWh PV generation at the meter (after losses & inverter clip)."""
     if pv is None or pv.system_kwp <= 0 or pv.inverter_kw <= 0:
         return pd.Series(0.0, index=idx, name="pv_kwh")
 
-    from .profiles import normalized_pv_shape
-
-    base = normalized_pv_shape(idx)  # 0..1, midday peak ~1
+    base = _normalised_pv_shape(idx)  # 0..1, midday peak ~1
     # losses and inverter clipping
     kw_ac = base * pv.system_kwp * (1.0 - pv.loss_fraction)
     kw_ac = np.minimum(kw_ac, pv.inverter_kw)
@@ -80,7 +143,7 @@ def apply_pv(idx: pd.DatetimeIndex, pv: PVConfig, interval_h: float) -> pd.Serie
     return pd.Series(kwh, index=idx, name="pv_kwh")
 
 
-def apply_battery_self_consume(
+def _apply_battery_self_consume(
     import_prebat: np.ndarray,
     pv_excess_prebat: np.ndarray,
     cfg: BatteryConfig,
@@ -152,16 +215,16 @@ def run(
     validate.assert_canon(df)
 
     # Baseline import/export series
-    s_import0, s_export0 = utils._collapse_flows(df)
+    s_import0, s_export0 = _collapse_flows(df)
     idx = s_import0.index
-    interval_h = utils._interval_hours(df)
+    interval_h = utils.interval_hours(df)
 
     # 1) EV charging adds to local load
-    ev_series = apply_ev(idx, ev, interval_h) if ev else pd.Series(0.0, index=idx)
+    ev_series = _apply_ev(idx, ev, interval_h) if ev else pd.Series(0.0, index=idx)
     local_load1 = (s_import0 + ev_series).to_numpy()
 
     # 2) PV generation offsets load then exports
-    pv_series = apply_pv(idx, pv, interval_h) if pv else pd.Series(0.0, index=idx)
+    pv_series = _apply_pv(idx, pv, interval_h) if pv else pd.Series(0.0, index=idx)
     pv_arr = pv_series.to_numpy()
     used_by_load = np.minimum(pv_arr, local_load1)
     leftover_pv = pv_arr - used_by_load
@@ -171,7 +234,7 @@ def run(
     # 3) Battery dispatch (self-consume)
     bat_dis = bat_ch = soc = np.zeros(len(idx))
     if battery and battery.capacity_kwh > 0 and battery.max_kw > 0:
-        bat_dis, bat_ch, soc = apply_battery_self_consume(
+        bat_dis, bat_ch, soc = _apply_battery_self_consume(
             import_prebat=import_prebat,
             pv_excess_prebat=leftover_pv,
             cfg=battery,
