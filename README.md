@@ -1,4 +1,4 @@
-# ⚡ meterdatalogic
+# meterdatalogic
 
 **meterdatalogic** is a lightweight Python package that provides **data transformation, validation, and analytics logic** for customer interval meter data.  
 It’s designed to serve as the core analytical engine for the *Meter Data Tool* (MDT) proof-of-concept — a Django-based web application deployed on AWS.
@@ -111,7 +111,7 @@ demand  = ml.transform.demand_window(df)
 Generate JSON-ready summary payloads for dashboards.
 
 ```python
-summary = ml.summary.summarize(df)
+summary = ml.summary.summarise(df)
 print(summary["meta"])
 print(summary["energy"])
 ```
@@ -131,5 +131,17 @@ plan = ml.types.Plan(
     feed_in_c_per_kwh=6.0
 )
 
+# Simple monthly billing
 cost = ml.pricing.estimate_monthly_cost(df, plan)
+
+# Complex cycles mode
+cycles = [
+    ("2025-05-31", "2025-06-30"),
+    ("2025-07-01", "2025-07-30"),
+]
+bills = ml.pricing.estimate_cycle_costs(
+    df, plan, cycles,
+    pay_on_time_discount=0.07,   
+    include_gst=True            
+)
 ```
