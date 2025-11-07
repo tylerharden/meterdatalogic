@@ -8,22 +8,18 @@ def filter_range(df: pd.DataFrame, start=None, end=None) -> pd.DataFrame:
     return df.loc[start:end] if start or end else df
 
 
-def resample_energy(
-    df: pd.DataFrame, rule: Literal["15min", "30min", "1H", "1D", "1MS"]
-) -> pd.DataFrame:
-    keys = ["nmi", "channel", "flow"]
+def resample_energy(df: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """
+    Sum kWh to a new cadence per (nmi, channel, flow).
+    """
+    cols = ["nmi", "channel", "flow", "kwh"]
+    d = df.reset_index()[["t_start", *cols]]
     out = (
-        df.reset_index()
-        .groupby(keys + [pd.Grouper(key="t_start", freq=rule)])["kwh"]
+        d.set_index("t_start")
+        .groupby(cols[:-1], observed=False)
+        .resample(freq, label="left", closed="left")["kwh"]
         .sum()
         .reset_index()
-        .set_index("t_start")
-        .sort_index()
-    )
-    out["cadence_min"] = (
-        60
-        if rule == "1H"
-        else 1440 if rule in ("1D", "1MS") else int(rule.replace("min", ""))
     )
     return out
 
@@ -50,7 +46,7 @@ def groupby_month(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     out = out.rename(columns={"t_start": "month"})
-    out["month"] = out["month"].dt.strftime("%Y-%m")
+    out["month"] = utils.month_label(out["month"])
     return out
 
 

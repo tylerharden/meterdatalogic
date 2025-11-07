@@ -184,38 +184,44 @@ def run(
     s_import_after = pd.Series(import_prebat, index=idx, name="grid_import")
     s_export_after = pd.Series(export_prebat, index=idx, name="grid_export_solar")
 
-    # Build canon df_after
-    records = []
-    for ts, val in s_import_after.items():
-        if val > 0:
-            records.append(
-                {
-                    "t_start": ts,
-                    "nmi": df["nmi"].iloc[0],
-                    "channel": "E1",
-                    "flow": "grid_import",
-                    "kwh": float(val),
-                }
-            )
-    for ts, val in s_export_after.items():
-        if val > 0:
-            records.append(
-                {
-                    "t_start": ts,
-                    "nmi": df["nmi"].iloc[0],
-                    "channel": "B1",
-                    "flow": "grid_export_solar",
-                    "kwh": float(val),
-                }
-            )
+    # Vectorized build of df_after (only positive intervals)
+    imp_mask = s_import_after.to_numpy() > 0
+    exp_mask = s_export_after.to_numpy() > 0
+    nmi_val = df["nmi"].iloc[0] if "nmi" in df.columns and len(df) else None
+    cad_min = (
+        int(df["cadence_min"].iloc[0])
+        if "cadence_min" in df.columns and len(df)
+        else None
+    )
 
-    df_after = pd.DataFrame.from_records(records).set_index("t_start")
-    if len(df_after):
-        df_after["cadence_min"] = int(df["cadence_min"].iloc[0])
+    parts = []
+    if imp_mask.any():
+        parts.append(
+            utils.build_canon_frame(
+                idx[imp_mask],
+                s_import_after.to_numpy()[imp_mask],
+                nmi=nmi_val,
+                channel="E1",
+                flow="grid_import",
+                cadence_min=cad_min,
+            )
+        )
+    if exp_mask.any():
+        parts.append(
+            utils.build_canon_frame(
+                idx[exp_mask],
+                s_export_after.to_numpy()[exp_mask],
+                nmi=nmi_val,
+                channel="B1",
+                flow="grid_export_solar",
+                cadence_min=cad_min,
+            )
+        )
+
+    if parts:
+        df_after = pd.concat(parts, ignore_index=False).sort_index()
         df_after.index = df_after.index.tz_convert(df.index.tz)
-        df_after = df_after.sort_index()
     else:
-        # empty but canon-shaped
         df_after = pd.DataFrame(columns=canon.REQUIRED_COLS).set_index(
             pd.DatetimeIndex([], tz=df.index.tz, name=canon.INDEX_NAME)
         )
