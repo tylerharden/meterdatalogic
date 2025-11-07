@@ -1,5 +1,4 @@
 import pandas as pd
-import pytest
 import meterdatalogic as ml
 
 TZ = "Australia/Brisbane"
