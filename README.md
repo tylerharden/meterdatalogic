@@ -1,20 +1,24 @@
 # meterdatalogic
 
-**meterdatalogic** is a lightweight Python package that provides **data transformation, validation, and analytics logic** for customer interval meter data.  
-It’s designed to serve as the core analytical engine for the *Meter Data Tool* (MDT) proof-of-concept — a Django-based web application deployed on AWS.
+meterdatalogic is a lightweight Python package that provides data transformation, validation, and analytics logic for customer interval meter data.  
+It’s designed to serve as the core analytical engine for the Meter Data Tool (MDT) — usable from web apps, notebooks, or pipelines.
 
-> The package provides consistent data structures and reusable functions for resampling, summarising, and analysing electricity interval data, regardless of where the data originated (e.g., NEM12 file, API upload, or internal system).
+- Canonical Data Shape — normalise datasets to a consistent schema for reliable analytics.
+- Small, Composable Modules — ingest, validate, transform, summary, pricing, scenario.
+- Framework-Agnostic — works in Django, FastAPI, notebooks, or jobs.
+- Plot-Ready Outputs — tidy DataFrames or JSON-ready dicts.
+- Self-Validating — schema checks for tz-aware, sorted, duplicate-free data.
+- Optimised for interval energy data — ToU, demand windows, tariff calculation.
 
 ---
 
-## Key Features
+## Install
 
-- **Canonical Data Shape** — all datasets are normalised to a consistent format for processing and analytics.
-- **Small, Composable Modules** — single-responsibility files for ingest, validation, transformation, summarisation, and pricing.
-- **Framework-Agnostic** — usable in Django, FastAPI, notebooks, or serverless pipelines.
-- **Plot-Ready Outputs** — functions return tidy DataFrames or JSON-ready dictionaries for visualisation.
-- **Self-Validating** — built-in schema checks to ensure clean, tz-aware, sorted data.
-- **Optimised for Interval Energy Data** — handles common energy data use-cases like ToU, demand, and tariff analysis.
+```bash
+pip install -U pandas numpy pytz  # or your preferred env setup
+```
+
+Supported: Python 3.10+ and recent pandas versions.
 
 ---
 
@@ -25,99 +29,96 @@ meterdatalogic/
   __init__.py
   canon.py
   types.py
+  exceptions.py
   utils.py
   ingest.py
   validate.py
   transform.py
   summary.py
   pricing.py
+  scenario.py
 tests/
   ...
-examples/
-  notebook_examples.ipynb
 ```
 
 ### Module Overview
 
-| File | Purpose |
-|------|----------|
-| **`canon.py`** | Defines the *canonical schema* for all meter data processed by the package. Contains constants such as index name, default timezone, cadence, and channel mappings (`E1 → grid_import`, `B1 → grid_export_solar`). |
-| **`types.py`** | Centralised data types using `TypedDict` and `dataclass` for strong typing. Includes structures for summaries, ToU bands, demand windows, and tariff plans. |
-| **`utils.py`** | Helper functions used throughout the package — timezone localisation, cadence inference, date range helpers, and frequency conversions. |
-| **`ingest.py`** | Entry point for loading and normalising data. Provides `from_dataframe()` and `from_nem12()` to read raw interval data from various sources and convert it into canonical form. |
-| **`validate.py`** | Data quality checks and guards. Ensures index is tz-aware, sorted, and free from negative or duplicate values. Provides lightweight integrity enforcement before analytics. |
-| **`transform.py`** | Core transformation logic. Includes resampling, day/month aggregations, 24-hour average profiles, Time-of-Use (ToU) binning, and demand window analysis. |
-| **`summary.py`** | Generates compact, JSON-ready summary payloads for dashboards. Produces total energy, average daily usage, 24-hour profile, peaks, and monthly rollups. |
-| **`pricing.py`** | Lightweight tariff calculation utilities. Converts kWh data into cost estimates based on ToU bands, demand charges, fixed supply charges, and feed-in credits. |
-| **`tests/`** | End-to-end pytest suite verifying canonicalisation, validation, ToU, pricing, and summary functions. |
-| **`examples/`** | Jupyter Notebook with Plotly visualisations for daily, monthly, and ToU analyses. |
+- canon.py — Canonical schema constants (index name, default TZ/cadence, channel→flow mappings).
+- types.py — TypedDict/dataclass types (ToU bands, DemandCharge, Plan, EV/PV/Battery configs).
+- exceptions.py — Domain-specific error classes (CanonError, TransformError, PricingError, ScenarioError, etc.) and require().
+- utils.py — General helpers (month_label, build_canon_frame).
+- ingest.py — Normalise raw data to canonical shape (from_dataframe, from_nem12).
+- validate.py — Enforce canonical invariants (assert_canon, ensure).
+- transform.py — Resampling/aggregations (groupby_day/month, profile24), ToU binning, demand windows.
+- summary.py — JSON-ready payloads (energy totals, per-day avg, peaks, profile24, months).
+- pricing.py — Billable aggregation and costs (monthly_billables, estimate_monthly_cost, optional cycles).
+- scenario.py — EV/PV/Battery simulation and orchestration (run).
 
 ---
 
-## Data Model
+## Canonical Schema
 
-Every dataset processed by `meterdatalogic` conforms to the **canonical schema**:
+Every dataset processed conforms to the canonical schema:
 
-| Column | Type | Description |
-|---------|------|-------------|
-| `t_start` | `DatetimeIndex (tz-aware)` | Start time of the interval. Index of the DataFrame. |
-| `nmi` | `str` | National Meter Identifier (unique per site). |
-| `channel` | `str` | Raw register suffix from the data source (e.g., `E1`, `B1`). |
-| `flow` | `str` | Semantic energy flow (`grid_import`, `grid_export_solar`, etc.). |
-| `kwh` | `float` | Energy used during the interval (always positive). |
-| `cadence_min` | `int` | Interval length in minutes (typically 30, 15, or 5). |
+- Index t_start: tz-aware DatetimeIndex, strictly increasing.
+- Columns:
+  - nmi: str (single site per frame).
+  - channel: str (source register label, e.g., E1, B1).
+  - flow: str (grid_import, controlled_load_import, grid_export_solar).
+  - kwh: float (energy in the interval; import/export indicated by flow, not sign).
+  - cadence_min: int (interval minutes, e.g., 30/15/5).
 
-### Conventions
-- **Import** (customer consumption) is *positive* kWh.
-- **Export** (PV feed-in) is represented by a *flow label*, not by negative sign.
-- **Index** (`t_start`) must be tz-aware and strictly monotonic.
-- **Default timezone** is `"Australia/Brisbane"` unless otherwise specified.
+Conventions:
+- Import (customer consumption) and export (PV feed-in) are separate flows.
+- Default timezone is "Australia/Brisbane" unless specified.
 
 ---
 
-## Core Features
+## Quick Start
 
-### 1. Ingestion
-Normalize data from any source to the canonical structure.
+### 1) Ingest
+
+Normalise raw data to canonical form.
 
 ```python
 import meterdatalogic as ml
 
 df = ml.ingest.from_dataframe(raw_df, tz="Australia/Brisbane")
-# or from a NEM12 file
-df = ml.ingest.from_nem12("data/nmi_data.csv", tz="Australia/Brisbane")
+ml.validate.assert_canon(df)  # raises CanonError on issues
 ```
 
-### 2. Validation
-Ensure data quality before use.
+### 2) Transform
 
-```python
-ml.validate.assert_canon(df)
-# raises CanonError if tz missing, index unsorted, or columns missing
-```
-
-### 3. Transformation
-Resample, aggregate, and slice data easily.
+Common aggregations and analytics.
 
 ```python
 daily   = ml.transform.groupby_day(df)
 monthly = ml.transform.groupby_month(df)
 profile = ml.transform.profile24(df)
-tou     = ml.transform.tou_bins(df, bands)
-demand  = ml.transform.demand_window(df)
+
+bands = [
+    ml.types.ToUBand("off","00:00","16:00",22.0),
+    ml.types.ToUBand("peak","16:00","21:00",45.0),
+    ml.types.ToUBand("shoulder","21:00","24:00",28.0),
+]
+tou = ml.transform.tou_bins(df, bands)
+
+demand = ml.transform.demand_window(df, start="16:00", end="21:00", days="MF")
 ```
 
-### 4. Summary & Insights
-Generate JSON-ready summary payloads for dashboards.
+### 3) Summary
+
+JSON-ready summary payloads for dashboards.
 
 ```python
 summary = ml.summary.summarise(df)
-print(summary["meta"])
-print(summary["energy"])
+print(summary["meta"])     # start/end/cadence/days
+print(summary["energy"])   # totals per flow
 ```
 
-### 5. Pricing
-Estimate bills from interval data.
+### 4) Pricing
+
+Estimate monthly bills from interval data.
 
 ```python
 plan = ml.types.Plan(
@@ -128,20 +129,30 @@ plan = ml.types.Plan(
     ],
     demand=ml.types.DemandCharge("16:00","21:00","MF",12.0),
     fixed_c_per_day=95.0,
-    feed_in_c_per_kwh=6.0
+    feed_in_c_per_kwh=6.0,
 )
 
-# Simple monthly billing
 cost = ml.pricing.estimate_monthly_cost(df, plan)
-
-# Complex cycles mode
-cycles = [
-    ("2025-05-31", "2025-06-30"),
-    ("2025-07-01", "2025-07-30"),
-]
-bills = ml.pricing.estimate_cycle_costs(
-    df, plan, cycles,
-    pay_on_time_discount=0.07,   
-    include_gst=True            
-)
 ```
+
+```python
+cycles = [("2025-05-31", "2025-06-30"), ("2025-07-01", "2025-07-30")]
+bills = ml.pricing.estimate_cycle_costs(df, plan, cycles, pay_on_time_discount=0.07, include_gst=True)
+```
+
+### 5) Scenarios (EV, PV, Battery)
+
+Simulate EV charging, PV generation, and battery self-consumption, then optionally price the outcome.
+
+```python
+ev = ml.types.EVConfig(daily_kwh=8.0, max_kw=7.0, window_start="18:00", window_end="22:00")
+pv = ml.types.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
+bat = ml.types.BatteryConfig(capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9, soc_min=0.1, soc_max=0.95)
+
+result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
+
+---
+
+## Testing
+
+- Run tests: pytest -q
