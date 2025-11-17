@@ -46,7 +46,7 @@ To simulate real-world variation, collect or synthesize a mix of NEM12 datasets:
 ### 1. **Unit Tests**
 Focus: Isolated validation of pure functions.
 - `_label_cycles`: inclusive → exclusive boundaries, correct labels.
-- `cycle_billables`: correct kWh totals for import/export.
+- `_cycle_billables`: correct kWh totals for import/export.
 - TOU binning: aggregated kWh equals original sum.
 - Demand window detection per cycle.
 
