@@ -10,11 +10,14 @@ from . import utils, validate, pricing, canon
 def _mask_days(idx: pd.DatetimeIndex, days: Literal["ALL", "MF", "MS"]) -> np.ndarray:
     if days == "ALL":
         return np.ones(len(idx), dtype=bool)
-    dow = idx.dayofweek  # Mon=0..Sun=6
+
+    dow = np.asarray(idx.dayofweek)
+
     if days == "MF":
-        return (dow <= 4).to_numpy()
+        return dow <= 4
     if days == "MS":
-        return (dow <= 5).to_numpy()
+        return dow <= 5
+
     return np.ones(len(idx), dtype=bool)
 
 
