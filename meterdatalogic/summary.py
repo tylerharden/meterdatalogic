@@ -34,14 +34,27 @@ def summarise(df: CanonFrame) -> SummaryPayload:
         "max_interval_time": max_interval_time,
     }
 
-    prof = transform.profile24(df)  # average day
-    months = transform.groupby_month(df)  # monthly totals per flow
-    days_df = transform.groupby_day(df).reset_index()  # day, flows...
-    days_df["day"] = days_df["day"].dt.strftime("%Y-%m-%d")
+    # Average day profile by 30-min slot (formatted HH:MM), per flow
+    s = df.copy()
+    s["slot"] = pd.DatetimeIndex(s.index).strftime("%H:%M")
+    g = s.groupby(["slot", "flow"])
+    prof = g["kwh"].mean().unstack("flow").fillna(0.0).reset_index()
+
+    # Monthly and daily energy by flow (pivoted columns)
+    months_df = transform.aggregate(
+        df, freq="1MS", groupby="flow", pivot=True, value_col="kwh"
+    )
+    months_df = months_df.reset_index().rename(columns={"t_start": "month"})
+    months_df["month"] = utils.month_label(pd.DatetimeIndex(months_df["month"]))
+    days_df = transform.aggregate(
+        df, freq="1D", groupby="flow", pivot=True, value_col="kwh"
+    ).reset_index()
+    days_df = days_df.rename(columns={"t_start": "day"})
+    days_df["day"] = pd.DatetimeIndex(days_df["day"]).strftime("%Y-%m-%d")
 
     # Pylance-friendly typed records
     prof_records: list[dict[str, float | str]] = prof.to_dict(orient="records")  # type: ignore[assignment]
-    months_records: list[dict[str, float | str]] = months.to_dict(orient="records")  # type: ignore[assignment]
+    months_records: list[dict[str, float | str]] = months_df.to_dict(orient="records")  # type: ignore[assignment]
     days_records: list[dict[str, float | str]] = days_df.to_dict(orient="records")  # type: ignore[assignment]
 
     # Ensure explicit str types for start/end
