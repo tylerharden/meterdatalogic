@@ -1,5 +1,6 @@
 from __future__ import annotations
 import pandas as pd
+from typing import cast
 
 from . import canon, utils, transform
 from .types import SummaryPayload, CanonFrame
@@ -11,7 +12,9 @@ def summarise(df: CanonFrame) -> SummaryPayload:
     end = idx.max()
     days = int((end - start).days) + 1 if pd.notna(start) and pd.notna(end) else 0
 
-    cadence = utils.infer_minutes_from_index(idx, default=canon.DEFAULT_CADENCE_MIN)
+    cadence = utils.infer_cadence_minutes(
+        pd.DatetimeIndex(idx), default=canon.DEFAULT_CADENCE_MIN
+    )
     cadence = int(cadence)
 
     # totals by flow
@@ -36,23 +39,35 @@ def summarise(df: CanonFrame) -> SummaryPayload:
     days_df = transform.groupby_day(df).reset_index()  # day, flows...
     days_df["day"] = days_df["day"].dt.strftime("%Y-%m-%d")
 
-    payload: SummaryPayload = {
-        "meta": {
-            "nmis": int(df["nmi"].nunique()) if "nmi" in df.columns else 0,
-            "start": start.isoformat() if pd.notna(start) else "",
-            "end": end.isoformat() if pd.notna(end) else "",
-            "cadence_min": cadence,
-            "days": days,
-            "channels": (
-                sorted(df["channel"].unique()) if "channel" in df.columns else []
-            ),
-            "flows": sorted(df["flow"].unique()) if "flow" in df.columns else [],
+    # Pylance-friendly typed records
+    prof_records: list[dict[str, float | str]] = prof.to_dict(orient="records")  # type: ignore[assignment]
+    months_records: list[dict[str, float | str]] = months.to_dict(orient="records")  # type: ignore[assignment]
+    days_records: list[dict[str, float | str]] = days_df.to_dict(orient="records")  # type: ignore[assignment]
+
+    # Ensure explicit str types for start/end
+    start_str: str = str(start) if pd.notna(start) else ""
+    end_str: str = str(end) if pd.notna(end) else ""
+
+    payload: SummaryPayload = cast(
+        SummaryPayload,
+        {
+            "meta": {
+                "nmis": int(df["nmi"].nunique()) if "nmi" in df.columns else 0,
+                "start": start_str,
+                "end": end_str,
+                "cadence_min": cadence,
+                "days": days,
+                "channels": (
+                    sorted(df["channel"].unique()) if "channel" in df.columns else []
+                ),
+                "flows": sorted(df["flow"].unique()) if "flow" in df.columns else [],
+            },
+            "energy": {k: float(v) for k, v in totals.items()},
+            "per_day_avg_kwh": float(per_day_avg),
+            "peaks": peaks,
+            "profile24": prof_records,
+            "months": months_records,
+            "days_series": days_records,
         },
-        "energy": {k: float(v) for k, v in totals.items()},
-        "per_day_avg_kwh": float(per_day_avg),
-        "peaks": peaks,
-        "profile24": prof.to_dict(orient="records"),
-        "months": months.to_dict(orient="records"),
-        "days_series": days_df.to_dict(orient="records"),  # NEW
-    }
+    )
     return payload
