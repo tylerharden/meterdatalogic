@@ -178,8 +178,11 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
         called["pricing"] = True
         return pd.DataFrame({"month": ["2025-01"], "total": [123.45]})
 
+    def fake_price_accept_kwargs(d, plan, **kwargs):
+        return fake_price(d, plan)
+
     monkeypatch.setattr(
-        scenario.pricing, "estimate_monthly_cost", fake_price, raising=True
+        scenario.pricing, "estimate_costs", fake_price_accept_kwargs, raising=True
     )
 
     plan = mdtypes.Plan(

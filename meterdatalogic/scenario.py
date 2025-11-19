@@ -13,7 +13,7 @@ from .types import (
     CanonFrame,
     ScenarioExplain,
 )
-from . import utils, validate, pricing, canon, transform
+from . import utils, validate, pricing, canon
 
 
 def _normalised_pv_shape(idx: pd.DatetimeIndex) -> np.ndarray:
@@ -185,8 +185,25 @@ def run(
     """
     validate.assert_canon(df)
 
-    # Baseline import/export series
-    s_import0, s_export0 = transform.collapse_import_export(df)
+    # Baseline import/export series (collapse to per-interval totals)
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise TypeError("scenario.run requires a DatetimeIndex index.")
+    idx_full = pd.DatetimeIndex(df.index)
+    flows = df["flow"].astype(str)
+    df_imp = df.loc[flows.str.contains("import", na=False)]
+    df_exp = df.loc[flows.str.contains("export", na=False)]
+    if df_imp.empty:
+        s_import0 = pd.Series(0.0, index=idx_full, name="import_kwh")
+    else:
+        s_import0 = (
+            df_imp.groupby(level=0)["kwh"].sum().reindex(idx_full, fill_value=0.0)
+        ).sort_index()
+    if df_exp.empty:
+        s_export0 = pd.Series(0.0, index=idx_full, name="export_kwh")
+    else:
+        s_export0 = (
+            df_exp.groupby(level=0)["kwh"].sum().reindex(idx_full, fill_value=0.0)
+        ).sort_index()
     # Ensure a proper DatetimeIndex type for static typing and downstream utilities
     idx = pd.DatetimeIndex(s_import0.index)
     interval_h = utils.interval_hours_from_index(idx)
@@ -276,9 +293,12 @@ def run(
     # Costs
     cost_before = cost_after = None
     if plan is not None:
-        cost_before = pricing.estimate_monthly_cost(df, plan)
-        # df_after is a plain DataFrame at runtime; cast to CanonFrame for typing correctness
-        cost_after = pricing.estimate_monthly_cost(cast(CanonFrame, df_after), plan)
+        bill_b = pricing.compute_billables(df, plan, mode="monthly")
+        cost_before = pricing.estimate_costs(bill_b, plan)
+        bill_a = pricing.compute_billables(
+            cast(CanonFrame, df_after), plan, mode="monthly"
+        )
+        cost_after = pricing.estimate_costs(bill_a, plan)
 
     # Deltas & explainables
     kwh_before = df.groupby("flow")["kwh"].sum()
