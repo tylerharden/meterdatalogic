@@ -21,4 +21,6 @@ build:
 
 # Clean build artifacts
 clean:
+	find . -name '__pycache__' -type d -prune -exec rm -rf {} +
+	find . -name '*.py[co]' -delete
 	rm -rf dist build *.egg-info .ruff_cache .pytest_cache

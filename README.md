@@ -49,9 +49,9 @@ tests/
 - utils.py — General helpers (month_label, build_canon_frame).
 - ingest.py — Normalise raw data to canonical shape (from_dataframe, from_nem12).
 - validate.py — Enforce canonical invariants (assert_canon, ensure).
-- transform.py — Resampling/aggregations (groupby_day/month, profile24), ToU binning, demand windows.
+- transform.py — Unified `aggregate(...)` for resampling/grouping and `tou_bins(...)` for ToU.
 - summary.py — JSON-ready payloads (energy totals, per-day avg, peaks, profile24, months).
-- pricing.py — Billable aggregation and costs (monthly_billables, estimate_monthly_cost, optional cycles).
+- pricing.py — Unified billing API: `compute_billables(..., mode='monthly'|'cycles')` and `estimate_costs(...)`.
 - scenario.py — EV/PV/Battery simulation and orchestration (run).
 
 ---
@@ -89,21 +89,32 @@ ml.validate.assert_canon(df)  # raises CanonError on issues
 
 ### 2) Transform
 
-Common aggregations and analytics.
+Unified aggregation helpers.
 
 ```python
-daily   = ml.transform.groupby_day(df)
-monthly = ml.transform.groupby_month(df)
-profile = ml.transform.profile24(df)
+# Daily energy by flow (wide columns)
+daily = ml.transform.aggregate(df, freq="1D", groupby="flow", pivot=True)
 
+# Monthly peak demand (MF 16:00–21:00) in kW
+demand = ml.transform.aggregate(
+  df,
+  freq="1MS",
+  flows=["grid_import"],
+  metric="kW",          # derive kW from kWh using cadence
+  stat="max",           # max within each monthly bucket
+  out_col="demand_kw",
+  window_start="16:00",
+  window_end="21:00",
+  window_days="MF",     # ALL | MF (Mon–Fri) | MS (Mon–Sun?)
+)
+
+# Time-of-Use bins (month + one column per band name)
 bands = [
-    ml.types.ToUBand("off","00:00","16:00",22.0),
-    ml.types.ToUBand("peak","16:00","21:00",45.0),
-    ml.types.ToUBand("shoulder","21:00","24:00",28.0),
+  ml.types.ToUBand("off","00:00","16:00",22.0),
+  ml.types.ToUBand("peak","16:00","21:00",45.0),
+  ml.types.ToUBand("shoulder","21:00","24:00",28.0),
 ]
 tou = ml.transform.tou_bins(df, bands)
-
-demand = ml.transform.demand_window(df, start="16:00", end="21:00", days="MF")
 ```
 
 ### 3) Summary
@@ -132,12 +143,14 @@ plan = ml.types.Plan(
     feed_in_c_per_kwh=6.0,
 )
 
-cost = ml.pricing.estimate_monthly_cost(df, plan)
+bill = ml.pricing.compute_billables(df, plan, mode="monthly")
+cost = ml.pricing.estimate_costs(bill, plan)
 ```
 
 ```python
 cycles = [("2025-05-31", "2025-06-30"), ("2025-07-01", "2025-07-30")]
-bills = ml.pricing.estimate_cycle_costs(df, plan, cycles, pay_on_time_discount=0.07, include_gst=True)
+bill_cycles = ml.pricing.compute_billables(df, plan, mode="cycles", cycles=cycles)
+bills = ml.pricing.estimate_costs(bill_cycles, plan, pay_on_time_discount=0.07, include_gst=True)
 ```
 
 ### 5) Scenarios (EV, PV, Battery)
@@ -150,9 +163,12 @@ pv = ml.types.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
 bat = ml.types.BatteryConfig(capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9, soc_min=0.1, soc_max=0.95)
 
 result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
+```
 
 ---
 
 ## Testing
 
-- Run tests: pytest -q
+```bash
+pytest -q
+```
