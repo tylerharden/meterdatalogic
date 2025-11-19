@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Literal, Optional, cast
 
 from .types import Plan, CanonFrame
 from . import transform, utils
@@ -115,17 +115,19 @@ def _cycle_billables(
 
     # ---- DEMAND ----
     if plan.demand:
-        dem = transform.demand_window(
-            dfx,
-            start=plan.demand.window_start,
-            end=plan.demand.window_end,
-            days=plan.demand.days,
+        # Demand per cycle: filter by window, compute kW, then aggregate max per cycle
+        imp = cast(CanonFrame, dfx[dfx["flow"] == "grid_import"].copy())
+        demand = transform.aggregate(
+            imp,
+            freq=None,
+            groupby=["cycle"],
+            metric="kW",
+            stat="max",
+            out_col="demand_kw",
+            window_start=plan.demand.window_start,
+            window_end=plan.demand.window_end,
+            window_days=plan.demand.days,
         )
-        # if demand_window already returns per-cycle values, group; else set zeroes
-        if "cycle" in dem.columns and "demand_kw" in dem.columns:
-            demand = dem.groupby("cycle", as_index=False)["demand_kw"].max()
-        else:
-            demand = pd.DataFrame({"cycle": tou["cycle"].unique(), "demand_kw": 0.0})
     else:
         demand = pd.DataFrame({"cycle": tou["cycle"].unique(), "demand_kw": 0.0})
 
@@ -133,7 +135,8 @@ def _cycle_billables(
     out = tou.merge(export, on="cycle", how="left").merge(
         demand, on="cycle", how="left"
     )
-    out = out.fillna(0.0)
+    numeric_cols = out.select_dtypes(include="number").columns
+    out[numeric_cols] = out[numeric_cols].fillna(0.0)
 
     # ---- EXACT DAY COUNTS ----
     def _days_from_label(lbl: str) -> int:
@@ -146,131 +149,166 @@ def _cycle_billables(
     return out
 
 
-def estimate_cycle_costs(
-    df: pd.DataFrame,
+def compute_billables(
+    df: CanonFrame,
     plan: Plan,
-    cycles: Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]],
+    *,
+    mode: Literal["monthly", "cycles"] = "monthly",
+    cycles: Optional[Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]]] = None,
+) -> pd.DataFrame:
+    """
+    Compute billable quantities for a given plan.
+
+    - mode="monthly": returns columns ['month', <band cols>, 'export_kwh', 'demand_kw']
+    - mode="cycles": returns columns ['cycle', <band cols>, 'export_kwh', 'demand_kw', 'days_in_cycle']
+    """
+    if mode == "monthly":
+        tou = transform.tou_bins(
+            df[df["flow"] == "grid_import"],
+            bands=[b.__dict__ for b in plan.usage_bands],
+        )
+        export = (
+            df.loc[df["flow"] == "grid_export_solar", ["kwh"]]
+            .resample("1MS")
+            .sum()
+            .rename(columns={"kwh": "export_kwh"})
+            .reset_index()
+        )
+        export["month"] = utils.month_label(export["t_start"])
+        export = export[["month", "export_kwh"]]
+
+        demand = (
+            transform.aggregate(
+                df,
+                freq="1MS",
+                flows=["grid_import"],
+                metric="kW",
+                stat="max",
+                out_col="demand_kw",
+                window_start=plan.demand.window_start,
+                window_end=plan.demand.window_end,
+                window_days=plan.demand.days,  # type: ignore[arg-type]
+            )
+            if plan.demand
+            else pd.DataFrame(
+                {"t_start": pd.to_datetime(tou["month"]), "demand_kw": 0.0}
+            )
+        )
+        demand = demand.copy()
+        demand["month"] = utils.month_label(pd.DatetimeIndex(demand.index))
+        demand = demand[["month", "demand_kw"]].reset_index(drop=True)
+        out = tou.merge(export, on="month", how="left").merge(
+            demand, on="month", how="left"
+        )
+        numeric_cols = out.select_dtypes(include="number").columns
+        out[numeric_cols] = out[numeric_cols].fillna(0.0)
+        return out
+
+    # cycles mode
+    if not cycles:
+        raise ValueError("cycles must be provided when mode='cycles'")
+    return _cycle_billables(df, plan, cycles)
+
+
+def estimate_costs(
+    bill: pd.DataFrame,
+    plan: Plan,
+    *,
     pay_on_time_discount: float = 0.0,
     include_gst: bool = False,
     gst_rate: float = 0.10,
 ) -> pd.DataFrame:
-    bill = _cycle_billables(df, plan, cycles)
-
-    # Energy across all usage bands your tou emitted (names must match ToUBand.name)
+    """
+    Estimate costs from billables (monthly or cycles).
+    Detects period type by presence of 'month' or 'cycle'.
+    """
+    # Energy across ToU band columns
     energy = 0.0
     for b in plan.usage_bands:
         energy = energy + bill.get(b.name, 0.0) * (b.rate_c_per_kwh / 100.0)
-    bill["energy_cost"] = energy
+    out = bill.copy()
+    out["energy_cost"] = energy
 
-    bill["demand_cost"] = (
-        bill["demand_kw"] * plan.demand.rate_per_kw_per_month if plan.demand else 0.0
-    )
-    bill["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * bill["days_in_cycle"]
-    bill["feed_in_credit"] = (
-        bill.get("export_kwh", 0.0) * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
+    # Demand cost
+    out["demand_cost"] = (
+        out.get("demand_kw", 0.0) * plan.demand.rate_per_kw_per_month
+        if plan.demand
+        else 0.0
     )
 
-    bill["subtotal"] = bill[
+    # Fixed cost
+    if "cycle" in out.columns:
+        if "days_in_cycle" not in out.columns:
+            # compute from label if missing
+            def _days_from_label(lbl: str) -> int:
+                s_str, e_str = lbl.split("→")
+                s = pd.Timestamp(s_str)
+                e = pd.Timestamp(e_str)
+                return int(((e + pd.Timedelta(days=1)) - s).days)
+
+            out["days_in_cycle"] = out["cycle"].astype(str).map(_days_from_label)
+        # Ensure days is numeric (map may produce object dtype)
+        days = pd.to_numeric(out["days_in_cycle"], errors="coerce").fillna(0.0)
+    elif "month" in out.columns:
+        _p = pd.PeriodIndex(out["month"], freq="M")
+        # PeriodIndex.days_in_month returns an Index, so convert to Series before to_numeric
+        days = pd.Series(_p.days_in_month)
+        days = pd.to_numeric(days, errors="coerce").fillna(0.0)
+    else:
+        raise ValueError("bill must contain 'month' or 'cycle' column")
+    out["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * days
+
+    # Coerce numeric columns to avoid object dtype from mappings
+    for col in ("export_kwh", "energy_cost", "demand_cost", "fixed_cost"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+        else:
+            out[col] = 0.0
+
+    # Feed-in credit (negative)
+    out["feed_in_credit"] = (
+        out["export_kwh"] * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
+    )
+
+    out["subtotal"] = out[
         ["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]
     ].sum(axis=1)
 
-    # Charges to discount are energy + demand + fixed (exclude feed-in credit)
-    charges_only = (
-        bill["energy_cost"] + bill["demand_cost"] + bill["fixed_cost"]
-    ).round(2)
-
-    # Discount shown on invoices is rounded to cents
-    bill["pay_on_time_discount"] = -(charges_only * float(pay_on_time_discount)).round(
+    charges_only = (out["energy_cost"] + out["demand_cost"] + out["fixed_cost"]).round(
         2
     )
+    out["pay_on_time_discount"] = -(charges_only * float(pay_on_time_discount)).round(2)
 
     if include_gst:
-        # GST base: discounted charges (exclude feed-in credit)
-        gst_base = (charges_only + bill["pay_on_time_discount"]).clip(lower=0.0)
-        bill["gst"] = (gst_base * float(gst_rate)).round(2)
+        gst_base = (charges_only + out["pay_on_time_discount"]).clip(lower=0.0)
+        out["gst"] = (gst_base * float(gst_rate)).round(2)
     else:
-        bill["gst"] = 0.0
+        out["gst"] = 0.0
 
-    bill["total"] = bill["subtotal"] + bill["pay_on_time_discount"] + bill["gst"]
+    out["total"] = out["subtotal"] + out["pay_on_time_discount"] + out["gst"]
 
-    cols = [
-        "cycle",
-        "days_in_cycle",
-        "energy_cost",
-        "demand_cost",
-        "fixed_cost",
-        "feed_in_credit",
-        "pay_on_time_discount",
-        "gst",
-    ]
-    band_cols = [b.name for b in plan.usage_bands if b.name in bill.columns]
-    total_col = ["total"]
-    # return bill[cols + band_cols + extra]
-    return bill[cols + band_cols + total_col]
-
-
-def monthly_billables(df: CanonFrame, plan: Plan) -> pd.DataFrame:
-    tou = transform.tou_bins(
-        df[df["flow"] == "grid_import"], bands=[b.__dict__ for b in plan.usage_bands]
-    )
-    # export credit
-    export = (
-        df.loc[df["flow"] == "grid_export_solar", ["kwh"]]
-        .resample("1MS")
-        .sum()
-        .rename(columns={"kwh": "export_kwh"})
-        .reset_index()
-    )
-    export["month"] = utils.month_label(export["t_start"])
-    export = export[["month", "export_kwh"]]
-
-    # demand
-    demand = (
-        transform.demand_window(
-            df,
-            start=plan.demand.window_start,
-            end=plan.demand.window_end,
-            days=plan.demand.days,
-        )
-        if plan.demand
-        else pd.DataFrame({"month": pd.unique(tou["month"]), "demand_kw": 0.0})
-    )
-    # merge
-    out = tou.merge(export, on="month", how="left").merge(
-        demand, on="month", how="left"
-    )
-    out = out.fillna(0.0)
-    return out
-
-
-def estimate_monthly_cost(df: CanonFrame, plan: Plan) -> pd.DataFrame:
-    bill = monthly_billables(df, plan)
-
-    # energy cost across all usage bands
-    bill["energy_cost"] = sum(
-        bill.get(b.name, 0.0) * (b.rate_c_per_kwh / 100.0) for b in plan.usage_bands
-    )
-
-    # demand cost
-    if plan.demand:
-        bill["demand_cost"] = bill["demand_kw"] * plan.demand.rate_per_kw_per_month
+    # Order columns: period id first, then costs
+    if "month" in out.columns:
+        cols = [
+            "month",
+            "energy_cost",
+            "demand_cost",
+            "fixed_cost",
+            "feed_in_credit",
+            "pay_on_time_discount",
+            "gst",
+            "total",
+        ]
     else:
-        bill["demand_cost"] = 0.0
-
-    # fixed cost — one daily charge per calendar day in the billing month
-    _p = pd.PeriodIndex(bill["month"], freq="M")
-    days_in_month = _p.days_in_month
-    bill["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * days_in_month
-
-    # feed-in credit (negative)
-    bill["feed_in_credit"] = (
-        bill.get("export_kwh", 0.0) * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
-    )
-
-    bill["total"] = bill[
-        ["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]
-    ].sum(axis=1)
-
-    return bill[
-        ["month", "energy_cost", "demand_cost", "fixed_cost", "feed_in_credit", "total"]
-    ]
+        cols = [
+            "cycle",
+            "days_in_cycle",
+            "energy_cost",
+            "demand_cost",
+            "fixed_cost",
+            "feed_in_credit",
+            "pay_on_time_discount",
+            "gst",
+            "total",
+        ]
+    return out[cols]

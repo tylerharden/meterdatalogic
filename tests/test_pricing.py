@@ -65,13 +65,19 @@ def test_no_demand_no_export(halfhour_rng, monkeypatch):
     # No demand in this plan.
     monkeypatch.setattr(
         pricing.transform,
-        "demand_window",
+        "aggregate",
         lambda *a, **k: pd.DataFrame(
-            {"month": utils.month_label(df.index).unique(), "demand_kw": 0.0}
+            {
+                "t_start": pd.to_datetime(
+                    [m + "-01" for m in utils.month_label(df.index).unique()]
+                ),
+                "demand_kw": 0.0,
+            }
         ),
         raising=True,
     )
-    cost = pricing.estimate_monthly_cost(df, plan)
+    bill = pricing.compute_billables(df, plan, mode="monthly")
+    cost = pricing.estimate_costs(bill, plan)
     assert (cost["demand_cost"] == 0).all()
     assert (cost["feed_in_credit"] == 0).all()
     assert (cost["energy_cost"] > 0).all()
@@ -100,14 +106,19 @@ def test_feed_in_credit_negative(halfhour_rng, monkeypatch):
     )
     monkeypatch.setattr(
         pricing.transform,
-        "demand_window",
+        "aggregate",
         lambda *a, **k: pd.DataFrame(
-            {"month": utils.month_label(df.index).unique(), "demand_kw": 0.0}
+            {
+                "t_start": pd.to_datetime(
+                    [m + "-01" for m in utils.month_label(df.index).unique()]
+                ),
+                "demand_kw": 0.0,
+            }
         ),
         raising=True,
     )
-    bill = pricing.monthly_billables(df, plan)
-    cost = pricing.estimate_monthly_cost(df, plan)
+    bill = pricing.compute_billables(df, plan, mode="monthly")
+    cost = pricing.estimate_costs(bill, plan)
     assert "export_kwh" in bill.columns  # monthly export aggregation included
     assert (cost["feed_in_credit"] <= 0).all()
     # Total must equal sum of components.
@@ -130,7 +141,8 @@ def test_pricing_estimate_monthly_cost(canon_df_mixed_flows):
         fixed_c_per_day=95.0,
         feed_in_c_per_kwh=6.0,
     )
-    cost = pricing.estimate_monthly_cost(df, plan)
+    bill = pricing.compute_billables(df, plan, mode="monthly")
+    cost = pricing.estimate_costs(bill, plan)
     assert set(
         ["month", "energy_cost", "demand_cost", "fixed_cost", "feed_in_credit", "total"]
     ).issubset(cost.columns)

@@ -58,7 +58,8 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
             # Align start to the first local time-of-day present in this day's data to preserve phase
             day_local = pd.DatetimeIndex(day_df.index).tz_convert(tzname)
             offset = day_local[0] - day_local[0].normalize()
-            day_start = pd.Timestamp(date_val) + offset
+            date_ts = cast(pd.Timestamp, date_val)
+            day_start = date_ts + offset
             full_index = pd.date_range(
                 start=day_start,
                 periods=slots,
@@ -79,7 +80,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
                 flows_dict[str(flow_name)] = s.to_list()
 
             logical_day: LogicalDay = {
-                "date": pd.Timestamp(date_val).to_pydatetime(),
+                "date": date_ts.to_pydatetime(),
                 "interval_min": cadence_min,
                 "slots": slots,
                 "flows": flows_dict,

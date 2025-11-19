@@ -1,6 +1,6 @@
 from __future__ import annotations
 import pandas as pd
-from typing import Optional
+from typing import Optional, cast
 
 from . import canon, exceptions
 
@@ -8,7 +8,8 @@ from . import canon, exceptions
 def assert_canon(df: pd.DataFrame) -> None:
     if df.index.name != canon.INDEX_NAME:
         raise exceptions.CanonError(f"Index must be '{canon.INDEX_NAME}'.")
-    if df.index.tz is None:
+    tz_index = cast(pd.DatetimeIndex, df.index)
+    if tz_index.tz is None:
         raise exceptions.CanonError("Index must be tz-aware.")
     for col in canon.REQUIRED_COLS:
         if col not in df.columns:
