@@ -2,8 +2,35 @@ from __future__ import annotations
 from typing import TypedDict, Literal, List, Dict, Optional
 from dataclasses import dataclass
 import pandas as pd
+from datetime import datetime
 
 Flow = Literal["grid_import", "controlled_load_import", "grid_export_solar"]
+
+
+# Canon Dataframe
+class CanonFrame(pd.DataFrame):
+    @property
+    def _constructor(self):
+        return CanonFrame
+
+
+# Logical
+class LogicalDay(TypedDict):
+    date: datetime  # normalised to midnight in tz
+    interval_min: int  # e.g. 5 or 30
+    slots: int  # number of intervals in the day (e.g. 288)
+    flows: Dict[str, List[float]]  # flow_name -> kWh array
+
+
+class LogicalSeries(TypedDict):
+    nmi: str
+    channel: str
+    tz: str
+    days: List[LogicalDay]
+
+
+# Whole dataset: multiple NMI/channel series
+LogicalCanon = List[LogicalSeries]
 
 
 # Metadata about the dataset
@@ -13,6 +40,8 @@ class SummaryMeta(TypedDict):
     end: str
     cadence_min: int
     days: int
+    channels: List[str]
+    flows: List[str]
 
 
 class SummaryPayload(TypedDict):
@@ -22,6 +51,7 @@ class SummaryPayload(TypedDict):
     peaks: Dict[str, object]
     profile24: List[Dict[str, float]]
     months: List[Dict[str, float]]
+    days_series: List[Dict[str, float]]
 
 
 ## TOU Pricing Models
