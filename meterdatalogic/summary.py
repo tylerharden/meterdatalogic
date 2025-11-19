@@ -2,16 +2,15 @@ from __future__ import annotations
 import pandas as pd
 
 from . import canon, utils, transform
-from .types import SummaryPayload
+from .types import SummaryPayload, CanonFrame
 
 
-def summarise(df: pd.DataFrame) -> SummaryPayload:
+def summarise(df: CanonFrame) -> SummaryPayload:
     idx = df.index
     start = idx.min()
     end = idx.max()
     days = int((end - start).days) + 1 if pd.notna(start) and pd.notna(end) else 0
 
-    # Prefer inference from the index (works even if df has multiple flows/channels)
     cadence = utils.infer_minutes_from_index(idx, default=canon.DEFAULT_CADENCE_MIN)
     cadence = int(cadence)
 
@@ -32,8 +31,10 @@ def summarise(df: pd.DataFrame) -> SummaryPayload:
         "max_interval_time": max_interval_time,
     }
 
-    prof = transform.profile24(df)
-    months = transform.groupby_month(df).to_dict(orient="records")
+    prof = transform.profile24(df)  # average day
+    months = transform.groupby_month(df)  # monthly totals per flow
+    days_df = transform.groupby_day(df).reset_index()  # day, flows...
+    days_df["day"] = days_df["day"].dt.strftime("%Y-%m-%d")
 
     payload: SummaryPayload = {
         "meta": {
@@ -51,6 +52,7 @@ def summarise(df: pd.DataFrame) -> SummaryPayload:
         "per_day_avg_kwh": float(per_day_avg),
         "peaks": peaks,
         "profile24": prof.to_dict(orient="records"),
-        "months": months,
+        "months": months.to_dict(orient="records"),
+        "days_series": days_df.to_dict(orient="records"),  # NEW
     }
     return payload
