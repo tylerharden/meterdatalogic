@@ -1,17 +1,47 @@
 from __future__ import annotations
 from typing import TypedDict, Literal, List, Dict, Optional
 from dataclasses import dataclass
-import pandas as pd
 from datetime import datetime
+
+import pandas as pd
 
 Flow = Literal["grid_import", "controlled_load_import", "grid_export_solar"]
 
 
-# Canon Dataframe
+# Canon DataFrame
 class CanonFrame(pd.DataFrame):
+    """
+    Strongly-typed canonical interval dataframe.
+
+    Expected:
+      - DatetimeIndex named 't_start', tz-aware
+      - Columns: ['nmi', 'channel', 'flow', 'kwh', 'cadence_min']
+    """
+
     @property
     def _constructor(self):
         return CanonFrame
+
+    # Convenience typed accessors (optional, but handy)
+    @property
+    def nmi(self) -> pd.Series:
+        return self["nmi"]
+
+    @property
+    def channel(self) -> pd.Series:
+        return self["channel"]
+
+    @property
+    def flow(self) -> pd.Series:
+        return self["flow"]
+
+    @property
+    def kwh(self) -> pd.Series:
+        return self["kwh"]
+
+    @property
+    def cadence_min(self) -> pd.Series:
+        return self["cadence_min"]
 
 
 # Logical
@@ -49,9 +79,28 @@ class SummaryPayload(TypedDict):
     energy: Dict[str, float]
     per_day_avg_kwh: float
     peaks: Dict[str, object]
-    profile24: List[Dict[str, float]]
-    months: List[Dict[str, float]]
-    days_series: List[Dict[str, float]]
+    # DataFrames converted to records include label columns (e.g., 'slot', 'month', 'day') as str,
+    # and flow columns as floats. Allow both.
+    profile24: List[Dict[str, float | str]]
+    months: List[Dict[str, float | str]]
+    days_series: List[Dict[str, float | str]]
+
+
+# Scenario deltas / explainables for stronger typing
+class ScenarioDelta(TypedDict, total=False):
+    import_kwh_delta: float
+    export_kwh_delta: float
+    total_kwh_delta: float
+    cost_total_delta: Optional[float]
+
+
+class ScenarioExplain(TypedDict, total=False):
+    ev_kwh: float
+    pv_kwh: float
+    battery_discharge_kwh: float
+    battery_charge_kwh: float
+    battery_cycles_est: float
+    pv_self_consumption_pct: Optional[float]
 
 
 ## TOU Pricing Models
@@ -112,11 +161,11 @@ class BatteryConfig:
 
 @dataclass
 class ScenarioResult:
-    df_before: pd.DataFrame
-    df_after: pd.DataFrame
-    summary_before: dict
-    summary_after: dict
+    df_before: CanonFrame
+    df_after: CanonFrame
+    summary_before: SummaryPayload
+    summary_after: SummaryPayload
     cost_before: Optional[pd.DataFrame]
     cost_after: Optional[pd.DataFrame]
-    delta: Dict[str]
-    explain: Dict[str]
+    delta: ScenarioDelta
+    explain: ScenarioExplain

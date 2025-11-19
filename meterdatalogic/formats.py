@@ -1,11 +1,8 @@
 from __future__ import annotations
-
-from typing import Iterable
-from datetime import datetime
-
 import pandas as pd
+from typing import cast
 
-from . import canon, validate
+from . import canon, validate, utils
 from .types import CanonFrame, LogicalCanon, LogicalSeries, LogicalDay
 
 
@@ -23,7 +20,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
         return []
 
     # Ensure tz-aware DatetimeIndex (should already be true)
-    idx = df.index
+    idx = pd.DatetimeIndex(df.index)
     if idx.tz is None:
         raise ValueError("CanonFrame index must be tz-aware for logical encoding")
 
@@ -40,14 +37,12 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
         g = g.sort_index()
 
         # infer cadence in minutes for this series
-        cadence_min = int(
-            canon.infer_minutes_from_index(g.index)
-            if hasattr(canon, "infer_minutes_from_index")
-            else (g.index[1] - g.index[0]).total_seconds() / 60.0
+        cadence_min = utils.infer_cadence_minutes(
+            pd.DatetimeIndex(g.index), default=canon.DEFAULT_CADENCE_MIN
         )
 
         # derive local date for each interval
-        local_idx = g.index.tz_convert(tzname)
+        local_idx = pd.DatetimeIndex(g.index).tz_convert(tzname)
         dates = local_idx.normalize()  # midnight in local tz
         g = g.copy()
         g["_date"] = dates
@@ -60,7 +55,10 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
             slots = int(24 * 60 / cadence_min)
 
             # Build a complete date-range index for safety
-            day_start = date_val
+            # Align start to the first local time-of-day present in this day's data to preserve phase
+            day_local = pd.DatetimeIndex(day_df.index).tz_convert(tzname)
+            offset = day_local[0] - day_local[0].normalize()
+            day_start = pd.Timestamp(date_val) + offset
             full_index = pd.date_range(
                 start=day_start,
                 periods=slots,
@@ -81,7 +79,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
                 flows_dict[str(flow_name)] = s.to_list()
 
             logical_day: LogicalDay = {
-                "date": date_val.to_pydatetime(),
+                "date": pd.Timestamp(date_val).to_pydatetime(),
                 "interval_min": cadence_min,
                 "slots": slots,
                 "flows": flows_dict,
@@ -102,14 +100,16 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
 def from_logical(obj: LogicalCanon) -> CanonFrame:
     """
     Convert compressed logical model back into canonical DataFrame.
+
+    This reconstructs:
+      - index: tz-aware DatetimeIndex 't_start'
+      - columns: nmi, channel, flow, kwh, cadence_min
     """
     if not obj:
         # empty CanonFrame with the right columns/index
-        return pd.DataFrame(
-            columns=["nmi", "channel", "flow", "kwh", "cadence_min"]
-        ).set_index(pd.DatetimeIndex([], name=canon.INDEX_NAME))
+        return utils.empty_canon_frame()
 
-    records = []
+    frames: list[pd.DataFrame] = []
 
     for series in obj:
         nmi = series["nmi"]
@@ -122,18 +122,15 @@ def from_logical(obj: LogicalCanon) -> CanonFrame:
             slots = int(day["slots"])
             flows = day["flows"]
 
-            # start-of-day in tz
+            # Normalise to a tz-aware start-of-day
             ts = pd.Timestamp(date_val)
-
             if ts.tz is None:
-                # naive -> localise directly
                 day_start = ts.tz_localize(tz)
             else:
-                # already tz-aware -> convert to desired tz
                 day_start = ts.tz_convert(tz)
 
             idx = pd.date_range(
-                start=day_start,
+                start=pd.Timestamp(day_start),
                 periods=slots,
                 freq=f"{cadence_min}min",
             )
@@ -144,20 +141,22 @@ def from_logical(obj: LogicalCanon) -> CanonFrame:
                         f"Flow {flow_name!r} for {nmi}/{channel} on {date_val} "
                         f"has {len(values)} slots, expected {slots}"
                     )
-                for ts, kwh in zip(idx, values):
-                    records.append(
-                        {
-                            canon.INDEX_NAME: ts,
-                            "nmi": nmi,
-                            "channel": channel,
-                            "flow": flow_name,
-                            "kwh": float(kwh),
-                            "cadence_min": cadence_min,
-                        }
-                    )
 
-    df = pd.DataFrame.from_records(records)
-    df.set_index(canon.INDEX_NAME, inplace=True)
-    df.sort_index(inplace=True)
+                df_flow = pd.DataFrame(
+                    {
+                        canon.INDEX_NAME: idx,
+                        "nmi": nmi,
+                        "channel": channel,
+                        "flow": flow_name,
+                        "kwh": pd.to_numeric(values, errors="coerce").astype(float),
+                        "cadence_min": cadence_min,
+                    }
+                ).set_index(canon.INDEX_NAME)
+
+                frames.append(df_flow)
+    if not frames:
+        return utils.empty_canon_frame()
+
+    df: CanonFrame = cast(CanonFrame, pd.concat(frames, axis=0).sort_index())
     validate.assert_canon(df)
     return df

@@ -1,9 +1,9 @@
 from __future__ import annotations
 import pandas as pd
-from typing import IO, Optional
-from zoneinfo import ZoneInfo
+from typing import IO, Optional, cast
 
 from . import canon, utils, validate
+from .types import CanonFrame
 
 try:
     from nemreader import NEMFile
@@ -17,10 +17,17 @@ def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
 
     gcols = ["nmi", "channel"]
 
+    def _infer_group_cadence(g: pd.DataFrame) -> int:
+        return int(
+            utils.infer_cadence_minutes(
+                pd.DatetimeIndex(g.index), default=canon.DEFAULT_CADENCE_MIN
+            )
+        )
+
     cad_per_group = (
         df.sort_index()
         .groupby(gcols, observed=True)
-        .apply(lambda g: utils.infer_minutes_from_index(g.index), include_groups=False)
+        .apply(_infer_group_cadence)
         .rename("cadence_min")
         .reset_index()
     )
@@ -69,7 +76,7 @@ def from_dataframe(
     tz: str = canon.DEFAULT_TZ,
     channel_map: Optional[dict[str, str]] = None,
     nmi: Optional[int] = None,
-) -> pd.DataFrame:
+) -> CanonFrame:
     """
     Parse a provided DataFrame with canon-like columns
     and normalise to canon:
@@ -110,7 +117,9 @@ def from_dataframe(
     df = utils.ensure_tz_aware_index(df.sort_index(), tz)
 
     cols = [c for c in canon.REQUIRED_COLS if c in df.columns]
-    return df[cols].copy()
+    out = df[cols].copy()
+    out.__class__ = CanonFrame
+    return cast(CanonFrame, out)
 
 
 def from_nem12(
@@ -119,7 +128,7 @@ def from_nem12(
     tz: str = canon.DEFAULT_TZ,
     channel_map: Optional[dict[str, str]] = None,
     nmi: Optional[int] = None,
-) -> pd.DataFrame:
+) -> CanonFrame:
     """
     Parse a NEM12 file via nemreader.NEMFile.get_data_frame()
     and normalise to canon:
@@ -136,9 +145,7 @@ def from_nem12(
         nf.get_data_frame()
     )  # columns: nmi, suffix, serno, t_start, t_end, value, quality, evt_code, evt_desc
     if raw is None or raw.empty:
-        # return an empty canon-shaped frame
-        idx = pd.DatetimeIndex([], tz=ZoneInfo(tz), name=canon.INDEX_NAME)
-        return pd.DataFrame(columns=canon.REQUIRED_COLS, index=idx)
+        return utils.empty_canon_frame(tz=tz)
 
     # Rename to our expected names
     df = raw.rename(columns={"suffix": "channel", "value": "kwh"})
@@ -165,4 +172,5 @@ def from_nem12(
     # Keep canon columns
     out = df[["nmi", "channel", "flow", "kwh", "cadence_min"]].copy()
     out.index.name = canon.INDEX_NAME
-    return out
+    out.__class__ = CanonFrame
+    return cast(CanonFrame, out)

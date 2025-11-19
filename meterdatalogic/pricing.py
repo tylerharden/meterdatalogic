@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from typing import Iterable, Tuple
 
-from .types import Plan
+from .types import Plan, CanonFrame
 from . import transform, utils
 
 
@@ -45,9 +45,13 @@ def _label_cycles(
     ]
 
     # map each ts to the last start <= ts using searchsorted
-    ts_i8 = index.asi8
-    starts_i8 = starts.asi8
-    ends_i8 = ends.asi8
+    def _i8(idx: pd.DatetimeIndex) -> np.ndarray:
+        # Convert to int64 nanoseconds for searchsorted in a Pylance-friendly way
+        return idx.to_numpy(dtype="datetime64[ns]").astype("int64", copy=False)
+
+    ts_i8 = _i8(index)
+    starts_i8 = _i8(starts)
+    ends_i8 = _i8(ends)
 
     # idx = index of the candidate cycle (by start), or -1 if before first start
     idx = np.searchsorted(starts_i8, ts_i8, side="right") - 1
@@ -72,7 +76,7 @@ def _cycle_billables(
     """
     # attach labels
     dfx = df.copy()
-    dfx["cycle"] = _label_cycles(df.index, cycles)
+    dfx["cycle"] = _label_cycles(pd.DatetimeIndex(df.index), cycles)
     dfx = dfx[dfx["cycle"].notna()].copy()
 
     # ---- IMPORT (TOU) ----
@@ -86,9 +90,8 @@ def _cycle_billables(
         band_name = plan.usage_bands[0].name
         tou = (
             dfx[dfx["flow"] == "grid_import"]
-            .groupby("cycle", as_index=False)["kwh"]
-            .sum()
-            .rename(columns={"kwh": band_name})
+            .groupby("cycle", as_index=False)
+            .agg(**{band_name: ("kwh", "sum")})
         )
     else:
         # full binning then group
@@ -106,9 +109,8 @@ def _cycle_billables(
     # ---- EXPORT ----
     export = (
         dfx[dfx["flow"] == "grid_export_solar"]
-        .groupby("cycle", as_index=False)["kwh"]
-        .sum()
-        .rename(columns={"kwh": "export_kwh"})
+        .groupby("cycle", as_index=False)
+        .agg(export_kwh=("kwh", "sum"))
     )
 
     # ---- DEMAND ----
@@ -202,26 +204,26 @@ def estimate_cycle_costs(
         "gst",
     ]
     band_cols = [b.name for b in plan.usage_bands if b.name in bill.columns]
-    extra = ["export_kwh"] if "export_kwh" in bill.columns else []
     total_col = ["total"]
     # return bill[cols + band_cols + extra]
     return bill[cols + band_cols + total_col]
 
 
-def monthly_billables(df: pd.DataFrame, plan: Plan) -> pd.DataFrame:
+def monthly_billables(df: CanonFrame, plan: Plan) -> pd.DataFrame:
     tou = transform.tou_bins(
         df[df["flow"] == "grid_import"], bands=[b.__dict__ for b in plan.usage_bands]
     )
     # export credit
     export = (
-        df[df["flow"] == "grid_export_solar"]
-        .resample("1MS")["kwh"]
+        df.loc[df["flow"] == "grid_export_solar", ["kwh"]]
+        .resample("1MS")
         .sum()
-        .rename("export_kwh")
+        .rename(columns={"kwh": "export_kwh"})
         .reset_index()
     )
     export["month"] = utils.month_label(export["t_start"])
     export = export[["month", "export_kwh"]]
+
     # demand
     demand = (
         transform.demand_window(
@@ -241,27 +243,34 @@ def monthly_billables(df: pd.DataFrame, plan: Plan) -> pd.DataFrame:
     return out
 
 
-def estimate_monthly_cost(df: pd.DataFrame, plan: Plan) -> pd.DataFrame:
+def estimate_monthly_cost(df: CanonFrame, plan: Plan) -> pd.DataFrame:
     bill = monthly_billables(df, plan)
-    # energy cost
+
+    # energy cost across all usage bands
     bill["energy_cost"] = sum(
         bill.get(b.name, 0.0) * (b.rate_c_per_kwh / 100.0) for b in plan.usage_bands
     )
-    # demand
+
+    # demand cost
     if plan.demand:
         bill["demand_cost"] = bill["demand_kw"] * plan.demand.rate_per_kw_per_month
     else:
         bill["demand_cost"] = 0.0
-    # fixed cost — approximate by counting distinct months (1 charge per month)
+
+    # fixed cost — one daily charge per calendar day in the billing month
     _p = pd.PeriodIndex(bill["month"], freq="M")
-    bill["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * _p.day
-    # feed-in credit
+    days_in_month = _p.days_in_month
+    bill["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * days_in_month
+
+    # feed-in credit (negative)
     bill["feed_in_credit"] = (
         bill.get("export_kwh", 0.0) * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
     )
+
     bill["total"] = bill[
         ["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]
     ].sum(axis=1)
+
     return bill[
         ["month", "energy_cost", "demand_cost", "fixed_cost", "feed_in_credit", "total"]
     ]

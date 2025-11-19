@@ -1,53 +1,19 @@
 from __future__ import annotations
-from typing import Optional, Literal
+from typing import Optional, cast
 import numpy as np
 import pandas as pd
 
-from .types import EVConfig, PVConfig, BatteryConfig, ScenarioResult, Plan
-from . import utils, validate, pricing, canon
-
-
-def _mask_days(idx: pd.DatetimeIndex, days: Literal["ALL", "MF", "MS"]) -> np.ndarray:
-    if days == "ALL":
-        return np.ones(len(idx), dtype=bool)
-
-    dow = np.asarray(idx.dayofweek)
-
-    if days == "MF":
-        return dow <= 4
-    if days == "MS":
-        return dow <= 5
-
-    return np.ones(len(idx), dtype=bool)
-
-
-def _collapse_flows(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-    """
-    Return (import_series_kwh, export_series_kwh) summed per interval.
-    Robust to subsets and flow naming like 'grid_export_solar' / 'grid_import'.
-    """
-    idx_full = df.index  # full timeline
-    flows = df["flow"].astype(str)
-
-    # Filter first, then groupby(level=0) so lengths match
-    df_imp = df.loc[flows.str.contains("import", na=False)]
-    df_exp = df.loc[flows.str.contains("export", na=False)]
-
-    imp = (
-        df_imp.groupby(level=0)["kwh"].sum()
-        if not df_imp.empty
-        else pd.Series(dtype=float)
-    )
-    exp = (
-        df_exp.groupby(level=0)["kwh"].sum()
-        if not df_exp.empty
-        else pd.Series(dtype=float)
-    )
-
-    # Reindex to full index to avoid NA and preserve timeline
-    imp = imp.reindex(idx_full, fill_value=0.0).sort_index()
-    exp = exp.reindex(idx_full, fill_value=0.0).sort_index()
-    return imp, exp
+from .types import (
+    EVConfig,
+    PVConfig,
+    BatteryConfig,
+    ScenarioResult,
+    ScenarioDelta,
+    Plan,
+    CanonFrame,
+    ScenarioExplain,
+)
+from . import utils, validate, pricing, canon, transform
 
 
 def _normalised_pv_shape(idx: pd.DatetimeIndex) -> np.ndarray:
@@ -81,7 +47,7 @@ def _apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Seri
 
     # Local wall times; idx is already tz-aware from ingest
     times = pd.Series(idx.time, index=idx)
-    day_mask = _mask_days(idx, ev.days)
+    day_mask = utils.day_mask(idx, ev.days)
 
     start_t = utils.parse_hhmm(ev.window_start).time()
     end_t = utils.parse_hhmm(ev.window_end).time()
@@ -137,9 +103,11 @@ def _apply_pv(idx: pd.DatetimeIndex, pv: PVConfig, interval_h: float) -> pd.Seri
     kw_ac = np.minimum(kw_ac, pv.inverter_kw)
 
     # Optional seasonal scaling
-    if pv.seasonal_scale:
+    # Use a local safe mapping to avoid attribute errors if seasonal_scale is None
+    scale = pv.seasonal_scale or {}
+    if scale:
         months = pd.Series([f"{ts.month:02d}" for ts in idx], index=idx)
-        mult = months.map(lambda m: pv.seasonal_scale.get(m, 1.0)).to_numpy()
+        mult = months.map(lambda m, s=scale: s.get(m, 1.0)).to_numpy()
         kw_ac = kw_ac * mult
 
     kwh = kw_ac * interval_h
@@ -204,7 +172,7 @@ def _apply_battery_self_consume(
 
 
 def run(
-    df: pd.DataFrame,
+    df: CanonFrame,
     *,
     ev: Optional[EVConfig] = None,
     pv: Optional[PVConfig] = None,
@@ -218,9 +186,10 @@ def run(
     validate.assert_canon(df)
 
     # Baseline import/export series
-    s_import0, s_export0 = _collapse_flows(df)
-    idx = s_import0.index
-    interval_h = utils.interval_hours(df)
+    s_import0, s_export0 = transform.collapse_import_export(df)
+    # Ensure a proper DatetimeIndex type for static typing and downstream utilities
+    idx = pd.DatetimeIndex(s_import0.index)
+    interval_h = utils.interval_hours_from_index(idx)
 
     # 1) EV charging adds to local load
     ev_series = _apply_ev(idx, ev, interval_h) if ev else pd.Series(0.0, index=idx)
@@ -286,10 +255,17 @@ def run(
 
     if parts:
         df_after = pd.concat(parts, ignore_index=False).sort_index()
-        df_after.index = df_after.index.tz_convert(df.index.tz)
+        # ensure index is a DatetimeIndex before converting timezone to match input
+        tz = getattr(df.index, "tz", None)
+        if tz is not None:
+            df_after.index = pd.DatetimeIndex(df_after.index).tz_convert(tz)
+        else:
+            df_after.index = pd.DatetimeIndex(df_after.index)
     else:
         df_after = pd.DataFrame(columns=canon.REQUIRED_COLS).set_index(
-            pd.DatetimeIndex([], tz=df.index.tz, name=canon.INDEX_NAME)
+            pd.DatetimeIndex(
+                [], tz=getattr(df.index, "tz", None), name=canon.INDEX_NAME
+            )
         )
     validate.assert_canon(df_after)
 
@@ -301,7 +277,8 @@ def run(
     cost_before = cost_after = None
     if plan is not None:
         cost_before = pricing.estimate_monthly_cost(df, plan)
-        cost_after = pricing.estimate_monthly_cost(df_after, plan)
+        # df_after is a plain DataFrame at runtime; cast to CanonFrame for typing correctness
+        cost_after = pricing.estimate_monthly_cost(cast(CanonFrame, df_after), plan)
 
     # Deltas & explainables
     kwh_before = df.groupby("flow")["kwh"].sum()
@@ -324,7 +301,6 @@ def run(
             else None
         ),
     }
-
     explain = {
         "ev_kwh": float(ev_series.sum()) if ev else 0.0,
         "pv_kwh": float(pv_series.sum()) if pv else 0.0,
@@ -339,14 +315,13 @@ def run(
             else None
         ),
     }
-
     return ScenarioResult(
         df_before=df,
-        df_after=df_after,
+        df_after=cast(CanonFrame, df_after),
         summary_before=summary_before,
         summary_after=summary_after,
         cost_before=cost_before,
         cost_after=cost_after,
-        delta=delta,
-        explain=explain,
+        delta=ScenarioDelta(**delta),
+        explain=cast(ScenarioExplain, explain),
     )
