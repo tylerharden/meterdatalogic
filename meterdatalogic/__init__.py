@@ -8,6 +8,7 @@ from . import (
     transform,
     summary,
     pricing,
+    scenario,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "transform",
     "summary",
     "pricing",
+    "scenario",
 ]
