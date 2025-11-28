@@ -64,18 +64,18 @@ Each (NMI, Channel, Meter Serial) group can have different:
 
 ## 3. Canonical Data Model
 
-Once parsed, each NEM12 channel is normalized to the **canonical dataframe format** used throughout the MDT:
+Once parsed, each NEM12 channel is normalized to the **canonical dataframe format** used throughout the MDT and the `meterdatalogic` library:
 
 | Column | Type | Description |
 |---------|------|-------------|
-| `t_start` | datetime (tz-aware) | Start time of interval (local time). |
+| `t_start` | datetime (tz-aware) | Start time of interval (local time). Index name. |
 | `nmi` | string | National Meter Identifier. |
 | `channel` | string | Raw suffix (E1, E2, B1, etc.). |
 | `flow` | string | Semantic flow classification (`grid_import`, `grid_export_solar`, etc.). |
 | `kwh` | float | Energy for that interval. |
 | `cadence_min` | int | Interval length (e.g., 15, 30, 60). |
-| `meter_serial` | string | Meter serial (if available). |
-| `quality_flag` | string | (Optional) AEMO data quality code. |
+| (optional) `meter_serial` | string | Meter serial (if available; not required by canon). |
+| (optional) `quality_flag` | string | AEMO data quality code if propagated. |
 
 ---
 
@@ -86,9 +86,9 @@ Once parsed, each NEM12 channel is normalized to the **canonical dataframe forma
 | **Multiple NMIs** | A single NEM12 file can contain many NMIs. | **User must select one NMI** before proceeding to analysis. We will display a list of NMIs detected and their available channels/date ranges. |
 | **Multiple Meters per NMI** | Meter replacements can cause overlapping or disjoint periods. | Merge chronologically; flag overlaps. Prefer later meter if overlapping. |
 | **Multiple Channels per Meter** | E1/E2 (import) and B1 (export) are common. | Each becomes a distinct `flow`. Combine in summaries. |
-| **Different Cadences** | Some 15-min, others 30-min. | Resample to user-chosen canonical cadence (default 30-min). |
+| **Different Cadences** | Some 5/15/30-min. | Per (nmi, channel) cadence is inferred; resampling is optional via transform helpers. |
 | **Disjoint Time Periods** | Some channels may start or stop mid-year. | Summaries should respect individual time spans. |
-| **Mixed timezones** | Older files may be UTC or unspecified. | Infer from header or assume QLD (AEST, UTC+10) — enforce tz-aware index. |
+| **Mixed timezones** | Older files may be UTC or unspecified. | Default tz is `Australia/Brisbane`; enforce tz-aware index. |
 | **Quality Flags (N, S, E)** | Indicate normal/substituted/estimated data. | Store as metadata; optional filters for “verified only.” |
 
 ---
@@ -105,7 +105,7 @@ DateTime, SiteID, kWh, FlowType, Channel
 - May represent multiple NMIs (“SiteID”) — same user selection logic applies.
 
 ### 5.2 API / Database Integration (future)
-Internal APIs or direct SQL extracts (e.g., ActiveDash, EMP, InfoDynamics) may return:
+Internal APIs or direct SQL extracts may return:
 ```
 timestamp | nmi | register_id | import_kwh | export_kwh | quality | source
 ```
@@ -117,11 +117,11 @@ These will be mapped to the canonical structure via lightweight adapters.
 
 | Check | Description | Enforcement |
 |--------|--------------|-------------|
-| **Regular cadence** | All intervals must align to consistent cadence (15/30/60). | Reindex or flag if irregular. |
-| **Monotonic timeline** | Timestamps must increase without duplication. | Sort & deduplicate. |
-| **No negative kWh** | Interval energy cannot be < 0. | Clamp or warn. |
-| **Reasonable magnitude** | >5 kWh/30 min flags potential cumulative data. | Warn user. |
-| **Timezone aware** | All timestamps must include tz info (AEST). | Convert or raise error. |
+| **Regular cadence** | Consistent per-series cadence. | Inferred per (nmi, channel); enforced by ingest. |
+| **Sorted ascending** | Timestamps must be ascending. | Required by `validate.assert_canon`. |
+| **Non‑negative kWh** | Interval energy cannot be < 0. | Ingest normalises to abs(kWh); validator rejects negatives. |
+| **Reasonable magnitude** | >5 kWh/30 min flags potential cumulative data. | Optional QA check. |
+| **Timezone aware** | All timestamps must include tz info. | Default `Australia/Brisbane`; enforced. |
 
 ---
 
@@ -140,7 +140,7 @@ These will be mapped to the canonical structure via lightweight adapters.
    | 4007654321 | E1 | 2023-12-15 | 2024-04-01 | 15 min | 987654321 |
 
 4. **User selects one NMI** to continue.  
-   - Load corresponding (NMI, Channel) data into canonical dataframe.  
+   - Load corresponding (NMI, Channel) data into canonical dataframe (library APIs also accept `nmi=` to filter).  
    - Store other NMIs as cached but inactive datasets.
 
 ---
@@ -150,7 +150,7 @@ These will be mapped to the canonical structure via lightweight adapters.
 | Area | Impact |
 |------|--------|
 | **Scenario modelling** | Must always operate on a *single NMI dataset*. |
-| **Visualisations** | Average daily and monthly charts assume one continuous channel set. |
+| **Visualisations** | Average daily and monthly charts assume one NMI; discontinuities handled by aggregation. |
 | **Tariff estimation** | Tariffs apply per NMI / connection point. |
 | **Summaries** | Multi-NMI reports can be aggregated later, but not mixed during modelling. |
 

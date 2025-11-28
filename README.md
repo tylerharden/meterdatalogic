@@ -15,10 +15,14 @@ It’s designed to serve as the core analytical engine for the Meter Data Tool (
 ## Install
 
 ```bash
-pip install -U pandas numpy pytz  # or your preferred env setup
+# From this repo (editable install for development)
+pip install -e ./meterdatalogic[dev]
+
+# Or bring your own env with deps
+pip install pandas numpy nemreader
 ```
 
-Supported: Python 3.10+ and recent pandas versions.
+Supported: Python 3.10+ and recent pandas versions. `nemreader` is only required for NEM12 ingest.
 
 ---
 
@@ -49,7 +53,7 @@ tests/
 - utils.py — General helpers (month_label, build_canon_frame).
 - ingest.py — Normalise raw data to canonical shape (from_dataframe, from_nem12).
 - validate.py — Enforce canonical invariants (assert_canon, ensure).
-- transform.py — Unified `aggregate(...)` for resampling/grouping and `tou_bins(...)` for ToU.
+- transform.py — Unified `aggregate(...)` for resampling/grouping and `tou_bins(...)` for ToU; helpers `profile(...)`, `period_breakdown(...)`, `base_from_profile(...)`, `window_stats_from_profile(...)`, `peak_from_profile(...)`, `top_n_from_profile(...)`.
 - summary.py — JSON-ready payloads (energy totals, per-day avg, peaks, profile24, months).
 - pricing.py — Unified billing API: `compute_billables(..., mode='monthly'|'cycles')` and `estimate_costs(...)`.
 - scenario.py — EV/PV/Battery simulation and orchestration (run).
@@ -115,6 +119,11 @@ bands = [
   ml.types.ToUBand("shoulder","21:00","24:00",28.0),
 ]
 tou = ml.transform.tou_bins(df, bands)
+
+# Average-day profile and top hours
+prof = ml.transform.profile(df)  # columns: slot, flows..., import_total
+top = ml.transform.top_n_from_profile(prof, n=4)
+print(top["hours"])  # e.g., ['18','19','20','21']
 ```
 
 ### 3) Summary
@@ -158,8 +167,8 @@ bills = ml.pricing.estimate_costs(bill_cycles, plan, pay_on_time_discount=0.07, 
 Simulate EV charging, PV generation, and battery self-consumption, then optionally price the outcome.
 
 ```python
-ev = ml.types.EVConfig(daily_kwh=8.0, max_kw=7.0, window_start="18:00", window_end="22:00")
-pv = ml.types.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
+ev = ml.types.EVConfig(daily_kwh=8.0, max_kw=7.0, window_start="18:00", window_end="22:00", days="ALL", strategy="immediate")
+pv = ml.types.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15, seasonal_scale={"01":1.05,"06":0.9})
 bat = ml.types.BatteryConfig(capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9, soc_min=0.1, soc_max=0.95)
 
 result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
