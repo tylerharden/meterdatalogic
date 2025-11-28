@@ -24,7 +24,7 @@ To simulate real-world variation, collect or synthesize a mix of NEM12 datasets:
 | **Import + Export** | E1 + B1 | Check feed-in credit logic |
 | **Controlled Load** | E1 + E2 | Validate multiple import flows |
 | **Multiple NMIs** | 2+ NMIs | Validate grouping/aggregation |
-| **Different Cadences** | 5, 15, 30 min | Test resampling accuracy |
+| **Different Cadences** | 5, 15, 30 min | Verify cadence inference per (nmi, channel) and consistent totals |
 | **Gaps or Duplicates** | Missing intervals | Validate data cleaning tolerance |
 | **Timezones** | AEST, AEDT | Check DST and tz-aware logic |
 | **Edge Months** | February, 31-day | Validate day-count calculations |
@@ -97,19 +97,29 @@ Use **pytest** for structured testing with parametrised cases.
 
 Example:
 ```python
+import meterdatalogic as ml
+import meterdatalogic.types as mdtypes
+
 @pytest.mark.parametrize("case", ["flat_alltimes_pv_jul2025", "tou_peak_shoulder"])
 def test_bill_against_golden(case, load_case):
-    df, meta = load_case(case)
-    plan = Plan(
-        usage_bands=[ToUBand(**b) for b in meta["plan"]["usage_bands"]],
-        fixed_c_per_day=meta["plan"]["fixed_c_per_day"],
-        feed_in_c_per_kwh=meta["plan"]["feed_in_c_per_kwh"]
-    )
-    cycles = [(meta["period"]["start"], meta["period"]["end"])]
-    out = estimate_cycle_costs(df, plan, cycles, include_gst=True, pay_on_time_discount=0.07)
-    row = out.iloc[0]
-    for key, expected in meta["expected"].items():
-        assert abs(float(row[key]) - float(expected)) <= 0.02
+  df, meta = load_case(case)
+  plan = mdtypes.Plan(
+    usage_bands=[mdtypes.ToUBand(**b) for b in meta["plan"]["usage_bands"]],
+    fixed_c_per_day=meta["plan"]["fixed_c_per_day"],
+    feed_in_c_per_kwh=meta["plan"]["feed_in_c_per_kwh"],
+    demand=(mdtypes.DemandCharge(**meta["plan"]["demand"]) if meta["plan"].get("demand") else None),
+  )
+  cycles = [(meta["period"]["start"], meta["period"]["end"])]
+  bill = ml.pricing.compute_billables(df, plan, mode="cycles", cycles=cycles)
+  out = ml.pricing.estimate_costs(
+    bill,
+    plan,
+    include_gst=True,
+    pay_on_time_discount=0.07,
+  )
+  row = out.iloc[0]
+  for key, expected in meta["expected"].items():
+    assert abs(float(row[key]) - float(expected)) <= 0.02
 ```
 
 ---

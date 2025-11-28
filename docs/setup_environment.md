@@ -9,28 +9,22 @@ This guide explains how to **set up, install, and develop** the `meterdatalogic`
 Make sure your folder structure looks like this:
 
 ```
-meterdatalogic/
-│
-├── meterlogic/              ← your package code
-│   ├── __init__.py
-│   ├── canon.py
-│   ├── ingest.py
-│   ├── validate.py
-│   ├── transform.py
-│   ├── summary.py
-│   ├── pricing.py
-│   └── ...
-│
-├── tests/                   ← pytest tests
-│   ├── test_ingest.py
-│   ├── test_validate.py
-│   ├── test_transform.py
-│   ├── test_summary.py
-│   └── ...
-│
-├── pyproject.toml           ← package configuration
-├── README.md
-└── .venv/                   ← your virtual environment (after creation)
+repo-root/
+├── meterdatalogic/
+│   ├── meterdatalogic/      ← package code
+│   │   ├── __init__.py
+│   │   ├── canon.py
+│   │   ├── ingest.py
+│   │   ├── validate.py
+│   │   ├── transform.py
+│   │   ├── summary.py
+│   │   ├── pricing.py
+│   │   └── ...
+│   ├── tests/               ← pytest tests
+│   ├── pyproject.toml       ← package configuration
+│   └── README.md
+(optional)
+└── .venv/                   ← virtual environment (after creation)
 ```
 
 ---
@@ -63,14 +57,18 @@ Install the package **in editable mode** (`-e`) so that changes to your code tak
 # Upgrade pip first
 pip install --upgrade pip
 
-# Install your package + optional extras + test tools
-pip install -e .[nem12] pytest
+# Option A: Install just the library (from repo root)
+pip install -e ./meterdatalogic[dev]
+
+# Option B: Work inside the library folder
+cd meterdatalogic
+pip install -e .[dev]
 ```
 
 ### What this does
 - `-e .` → installs your package in *editable mode* (creates a live link to your folder)
-- `[nem12]` → installs optional dependencies (e.g. `nemreader`)
-- `pytest` → installs the testing framework
+- `[dev]` → installs test tools (pytest, ruff, etc.)
+- `nemreader` is included for NEM12 ingest.
 
 ---
 
@@ -79,12 +77,7 @@ pip install -e .[nem12] pytest
 Run a quick import check inside your virtual environment:
 
 ```bash
-python -c "import meterlogic, os; print('meterlogic loaded from:', os.path.dirname(meterlogic.__file__))"
-```
-
-You should see something like:
-```
-meterlogic loaded from: /Users/tyler/Developer/meterdatalogic/meterlogic
+python -c "import meterdatalogic, os; print('meterdatalogic loaded from:', os.path.dirname(meterdatalogic.__file__))"
 ```
 
 If you see a path inside `.venv/lib/...`, it’s still fine — it just means the editable link is registered correctly.
@@ -93,10 +86,10 @@ If you see a path inside `.venv/lib/...`, it’s still fine — it just means th
 
 ## 5. Run Tests with Pytest
 
-From the project root (the same directory that contains `tests/`):
+From the library folder (`meterdatalogic/`) or repo root if installed with Option A:
 
 ```bash
-pytest -v
+pytest -q
 ```
 
 Example output:
@@ -121,8 +114,8 @@ pytest tests/test_ingest.py -v
    - Command Palette → “Python: Select Interpreter” → choose `.venv`
 
 2. **Configure Tests**  
-   - Command Palette → “Python: Configure Tests”  
-   - Choose **pytest** and select the `tests/` folder
+   - Command Palette → “Python: Configure Tests”
+   - Choose **pytest** and select the `meterdatalogic/tests/` folder
 
 3. **(Optional)** Add VS Code settings file:
 
@@ -131,7 +124,7 @@ pytest tests/test_ingest.py -v
    {
      "python.testing.pytestEnabled": true,
      "python.testing.unittestEnabled": false,
-     "python.testing.pytestArgs": ["tests"],
+   "python.testing.pytestArgs": ["meterdatalogic/tests"],
      "python.envFile": "${workspaceFolder}/.env"
    }
    ```
@@ -147,10 +140,10 @@ Typical loop while building the package:
 | Step | Command | Purpose |
 |------|----------|----------|
 | Activate environment | `source .venv/bin/activate` | Use your project Python env |
-| Install package | `pip install -e .[nem12]` | Editable dev install |
+| Install package | `pip install -e ./meterdatalogic[dev]` | Editable dev install |
 | Run tests | `pytest -v` | Validate code changes |
 | Lint/format | `ruff check .` / `black .` | Keep code consistent |
-| Try in REPL | `python` → `import meterlogic as ml` | Test functions interactively |
+| Try in REPL | `python` → `import meterdatalogic as ml` | Test functions interactively |
 
 ---
 
@@ -158,7 +151,7 @@ Typical loop while building the package:
 
 | Problem | Likely Cause | Fix |
 |----------|--------------|-----|
-| `ModuleNotFoundError: No module named 'meterlogic'` | Not installed in venv | Run `pip install -e .` |
+| `ModuleNotFoundError: No module named 'meterdatalogic'` | Not installed in venv | Run `pip install -e ./meterdatalogic` |
 | Tests not discovered | Wrong test folder | Run `pytest -v` from repo root |
 | VS Code shows red squiggles | Wrong interpreter | Re-select `.venv` via Command Palette |
 | Pandas version mismatch | Outdated dependency | `pip install -U pandas` |
@@ -177,8 +170,8 @@ python -m build
 Creates:
 ```
 dist/
-  meterlogic-0.1.0-py3-none-any.whl
-  meterlogic-0.1.0.tar.gz
+   meterdatalogic-<ver>-py3-none-any.whl
+   meterdatalogic-<ver>.tar.gz
 ```
 
 Can then upload to an internal PyPI or use it in other projects.
