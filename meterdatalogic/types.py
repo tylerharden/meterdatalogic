@@ -63,6 +63,9 @@ class LogicalSeries(TypedDict):
 LogicalCanon = List[LogicalSeries]
 
 
+# Summary
+
+
 # Metadata about the dataset
 class SummaryMeta(TypedDict):
     nmis: int
@@ -74,33 +77,56 @@ class SummaryMeta(TypedDict):
     flows: List[str]
 
 
-class SummaryPayload(TypedDict):
-    meta: SummaryMeta
-    energy: Dict[str, float]
+class SummaryPeaks(TypedDict, total=False):
+    max_interval_kwh: float
+    max_interval_time: Optional[str]
+
+
+class SummaryBase(TypedDict, total=False):
+    base_kw: float
+    base_kwh_per_day: float
+    share_of_daily_pct: float
+
+
+class WindowStat(TypedDict, total=False):
+    avg_kw: float
+    kwh_per_day: float
+    share_of_daily_pct: float
+
+
+class TopHours(TypedDict, total=False):
+    hours: List[str]
+    kwh_total: float
+    share_of_daily_pct: float
+
+
+class SummaryStats(TypedDict, total=False):
+    total_energy_kwh: float
     per_day_avg_kwh: float
-    peaks: Dict[str, object]
-    # DataFrames converted to records include label columns (e.g., 'slot', 'month', 'day') as str,
-    # and flow columns as floats. Allow both.
+    peak_consumption_kw: float
+    peak_time: Optional[str]
+    peaks: SummaryPeaks
+    base: SummaryBase
+    windows: Dict[str, WindowStat]
+    top_hours: TopHours
+
+
+class SeriesBreakdown(TypedDict, total=False):
+    total: List[Dict[str, float | str]]
+    peaks: List[Dict[str, float | str]]
+    average: List[Dict[str, float | str]]
+
+
+class SummaryDatasets(TypedDict, total=False):
     profile24: List[Dict[str, float | str]]
-    months: List[Dict[str, float | str]]
-    days_series: List[Dict[str, float | str]]
+    days: SeriesBreakdown
+    months: SeriesBreakdown
 
 
-# Scenario deltas / explainables for stronger typing
-class ScenarioDelta(TypedDict, total=False):
-    import_kwh_delta: float
-    export_kwh_delta: float
-    total_kwh_delta: float
-    cost_total_delta: Optional[float]
-
-
-class ScenarioExplain(TypedDict, total=False):
-    ev_kwh: float
-    pv_kwh: float
-    battery_discharge_kwh: float
-    battery_charge_kwh: float
-    battery_cycles_est: float
-    pv_self_consumption_pct: Optional[float]
+class SummaryPayload(TypedDict, total=False):
+    meta: SummaryMeta
+    stats: SummaryStats
+    datasets: SummaryDatasets
 
 
 ## TOU Pricing Models
@@ -129,6 +155,23 @@ class Plan:
 
 
 ## Scenario Configurations
+# Scenario Types
+class ScenarioDelta(TypedDict, total=False):
+    import_kwh_delta: float
+    export_kwh_delta: float
+    total_kwh_delta: float
+    cost_total_delta: Optional[float]
+
+
+class ScenarioExplain(TypedDict, total=False):
+    ev_kwh: float
+    pv_kwh: float
+    battery_discharge_kwh: float
+    battery_charge_kwh: float
+    battery_cycles_est: float
+    pv_self_consumption_pct: Optional[float]
+
+
 @dataclass
 class EVConfig:
     daily_kwh: float = 7.0  # energy to add per day for charging

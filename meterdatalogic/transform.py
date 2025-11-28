@@ -225,3 +225,220 @@ def tou_bins(
     out = out.rename(columns={"t_start": "month"})
     out["month"] = utils.month_label(out["month"])
     return out
+
+
+def base_from_profile(profile_with_import: pd.DataFrame, cadence_min: int) -> dict:
+    """Compute base load from average-day import profile.
+
+    Returns { base_kw, base_kwh_per_day }.
+    """
+    if profile_with_import.empty:
+        return {"base_kw": 0.0, "base_kwh_per_day": 0.0}
+    base_interval_kwh = float(profile_with_import["import_total"].min())
+    base_kw = base_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
+    base_kwh_per_day = base_kw * 24.0
+    return {"base_kw": float(base_kw), "base_kwh_per_day": float(base_kwh_per_day)}
+
+
+def window_stats_from_profile(
+    profile_with_import: pd.DataFrame,
+    windows: list[dict],
+    cadence_min: int,
+    total_daily_kwh: float | None = None,
+) -> dict:
+    """Compute avg_kw, kwh_per_day, share for configured windows using average-day profile.
+
+    windows: list of { key, start, end } in HH:MM.
+    """
+
+    def hhmm_to_minutes(hhmm: str) -> int:
+        h, m = hhmm.split(":")
+        h = int(h)
+        m = int(m)
+        if h == 24 and m == 0:
+            return 24 * 60
+        return h * 60 + m
+
+    total = (
+        float(total_daily_kwh)
+        if total_daily_kwh is not None
+        else float(profile_with_import["import_total"].sum())
+    )
+    out: dict[str, dict[str, float]] = {}
+    for w in windows:
+        start_m = hhmm_to_minutes(str(w["start"]))
+        end_m = hhmm_to_minutes(str(w["end"]))
+        if end_m < start_m:  # wrap
+            mask = profile_with_import["slot"].apply(
+                lambda s: (hhmm_to_minutes(s) >= start_m)
+                or (hhmm_to_minutes(s) < end_m)
+            )
+        else:
+            mask = profile_with_import["slot"].apply(
+                lambda s: (hhmm_to_minutes(s) >= start_m)
+                and (hhmm_to_minutes(s) < end_m)
+            )
+        window_kwh = float(profile_with_import.loc[mask, "import_total"].sum())
+        window_hours = (
+            (end_m - start_m) / 60.0
+            if end_m >= start_m
+            else ((24 * 60 - start_m) + end_m) / 60.0
+        )
+        avg_kw = (window_kwh / window_hours) if window_hours > 0 else 0.0
+        share = (window_kwh / total * 100.0) if total > 0 else 0.0
+        out[str(w["key"])] = {
+            "avg_kw": float(avg_kw),
+            "kwh_per_day": float(window_kwh),
+            "share_of_daily_pct": float(share),
+        }
+    return out
+
+
+def peak_from_profile(
+    profile_with_import: pd.DataFrame, cadence_min: int
+) -> tuple[float, Optional[str]]:
+    """Peak kW and time from average-day profile import_total."""
+    if profile_with_import.empty:
+        return 0.0, None
+    peak_interval_kwh = float(profile_with_import["import_total"].max())
+    peak_kw = peak_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
+    idx = int(profile_with_import["import_total"].to_numpy().argmax())
+    t = str(profile_with_import.loc[idx, "slot"]) if idx >= 0 else None
+    return float(peak_kw), t
+
+
+# ---------- More generic power-users' APIs ----------
+
+
+def profile(
+    df: CanonFrame,
+    *,
+    flows: Iterable[str] | None = None,
+    by: Literal["slot"] = "slot",
+    reducer: Literal["mean", "sum", "max"] = "mean",
+    pivot_by: str = "flow",
+    slot_fmt: str = "%H:%M",
+    include_import_total: bool = True,
+    import_flows: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Generic profile builder. Currently supports average-day by 30-min slot.
+
+    - by="slot": groups by formatted local time of day (e.g., HH:MM) and aggregates per `reducer`.
+    - pivot_by: column used to pivot (default flow).
+    - include_import_total: adds import_total column by summing import flows.
+    """
+    if by != "slot":
+        raise NotImplementedError("profile currently supports by='slot' only")
+    s = df.copy()
+    if flows:
+        s = s[s["flow"].isin(list(flows))]
+    # Index is expected tz-aware canonical; using index directly preserves local tz
+    s["slot"] = pd.DatetimeIndex(s.index).strftime(slot_fmt)
+    g = s.groupby(["slot", pivot_by])
+    if reducer == "mean":
+        prof = g["kwh"].mean().unstack(pivot_by).fillna(0.0).reset_index()
+    elif reducer == "sum":
+        prof = g["kwh"].sum().unstack(pivot_by).fillna(0.0).reset_index()
+    elif reducer == "max":
+        prof = g["kwh"].max().unstack(pivot_by).fillna(0.0).reset_index()
+    else:
+        raise ValueError(f"Unsupported reducer: {reducer}")
+    if include_import_total:
+        flow_cols = [c for c in prof.columns if c != "slot"]
+        if import_flows:
+            cols = [c for c in flow_cols if c in set(import_flows)]
+        else:
+            cols = [
+                c
+                for c in flow_cols
+                if ("import" in str(c)) or str(c).startswith("grid_")
+            ]
+            if not cols:
+                cols = flow_cols
+        prof["import_total"] = prof[cols].select_dtypes(float).sum(axis=1)
+    return prof
+
+
+def period_breakdown(
+    df: CanonFrame,
+    *,
+    freq: Literal["1D", "1MS"],
+    flows: Iterable[str] | None = None,
+    cadence_min: int | None = None,
+    labels: Literal["day", "month"] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Compute core per-period tables in one call: total, peaks, avg_interval_kwh.
+
+    Returns a dict with keys: total, peaks, average. Label column is 'day' or 'month'.
+    """
+    if labels is None:
+        labels = "day" if freq == "1D" else "month"
+
+    totals = aggregate(
+        df, freq=freq, groupby="flow", pivot=True, value_col="kwh", flows=flows
+    ).reset_index()
+    totals = totals.rename(columns={"t_start": labels})
+    if labels == "day":
+        totals[labels] = pd.DatetimeIndex(totals[labels]).strftime("%Y-%m-%d")
+    else:
+        # Assign values (avoid index alignment producing NaN)
+        totals[labels] = utils.month_label(pd.DatetimeIndex(totals[labels])).values
+    flow_cols = [c for c in totals.columns if c != labels]
+    totals["total_kwh"] = totals[flow_cols].select_dtypes(float).sum(axis=1)
+
+    peaks = aggregate(
+        df, freq=freq, value_col="kwh", agg="max", flows=flows
+    ).reset_index()
+    peaks = peaks.rename(columns={"t_start": labels, "kwh": "peak_interval_kwh"})
+    if labels == "day":
+        peaks[labels] = pd.DatetimeIndex(peaks[labels]).strftime("%Y-%m-%d")
+    else:
+        peaks[labels] = utils.month_label(pd.DatetimeIndex(peaks[labels])).values
+
+    avg = aggregate(df, freq=freq, metric="kW", stat="mean", flows=flows).reset_index()
+    avg = avg.rename(columns={"t_start": labels, "demand_kw": "mean_kw"})
+    if labels == "day":
+        avg[labels] = pd.DatetimeIndex(avg[labels]).strftime("%Y-%m-%d")
+    else:
+        avg[labels] = utils.month_label(pd.DatetimeIndex(avg[labels])).values
+    if cadence_min:
+        avg["avg_interval_kwh"] = avg["mean_kw"] * (cadence_min / 60.0)
+    else:
+        avg["avg_interval_kwh"] = 0.0
+    avg = avg[[labels, "avg_interval_kwh"]]
+
+    return {"total": totals, "peaks": peaks, "average": avg}
+
+
+def top_n_from_profile(
+    profile_df: pd.DataFrame,
+    *,
+    group_by: Literal["hour"] = "hour",
+    slot_col: str = "slot",
+    value_col: str = "import_total",
+    n: int = 4,
+    total_value: float | None = None,
+) -> dict:
+    """Generic top-N reducer from a profile dataframe.
+
+    Currently supports group_by='hour' on slot labels and sums value_col for ranking.
+    """
+    if group_by != "hour":
+        raise NotImplementedError("Only group_by='hour' supported")
+    if profile_df.empty:
+        return {"labels": [], "value_total": 0.0, "share_pct": 0.0}
+    grouped = (
+        profile_df.assign(_h=profile_df[slot_col].astype(str).str.slice(0, 2))
+        .groupby("_h")[value_col]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    labels = list(grouped.head(n).index)
+    value_total = float(grouped.head(n).sum())
+    denom = (
+        float(total_value)
+        if total_value is not None
+        else float(profile_df[value_col].sum())
+    )
+    share = (value_total / denom * 100.0) if denom > 0 else 0.0
+    return {"labels": labels, "value_total": value_total, "share_pct": float(share)}
