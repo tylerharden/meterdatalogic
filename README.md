@@ -57,6 +57,7 @@ tests/
 - summary.py — JSON-ready payloads (energy totals, per-day avg, peaks, profile24, months).
 - pricing.py — Unified billing API: `compute_billables(..., mode='monthly'|'cycles')` and `estimate_costs(...)`.
 - scenario.py — EV/PV/Battery simulation and orchestration (run).
+- insights/ — Config-driven insights & recommendations API (`generate_insights`) using canonical data, pricing, and scenarios.
 
 ---
 
@@ -181,3 +182,18 @@ result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
 ```bash
 pytest -q
 ```
+
+---
+
+## Releasing (GitHub Actions)
+
+We use semantic version tags vX.Y.Z and a release workflow that builds artifacts.
+
+Steps:
+1) Bump the version in pyproject.toml ([project.version]).
+2) Create a Git tag vX.Y.Z and push, or run the “Release meterdatalogic” workflow with an input version.
+3) The workflow builds wheel and sdist (dist/*.whl, *.tar.gz) and publishes a GitHub Release with assets.
+
+Notes:
+- Ensure pyproject version matches the tag. The workflow validates this.
+- If you target AWS Lambda layers or Linux/aarch64, build wheels in a compatible environment (e.g., AWS SAM python3.12 aarch64 image) before publishing a layer.
