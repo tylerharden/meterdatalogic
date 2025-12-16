@@ -24,13 +24,15 @@ def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
             )
         )
 
-    cad_per_group = (
-        df.sort_index()
-        .groupby(gcols, observed=True)
-        .apply(_infer_group_cadence)
-        .rename("cadence_min")
-        .reset_index()
-    )
+    gb = df.sort_index().groupby(gcols, observed=True)
+    # Future-proof against pandas deprecation of applying on group columns
+    try:
+        cad_series = gb.apply(
+            _infer_group_cadence, include_groups=False
+        )  # pandas >=2.2
+    except TypeError:
+        cad_series = gb.apply(_infer_group_cadence)
+    cad_per_group = cad_series.rename("cadence_min").reset_index()
 
     out = (
         df.reset_index()
