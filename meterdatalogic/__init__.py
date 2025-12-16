@@ -9,6 +9,7 @@ from . import (
     summary,
     pricing,
     scenario,
+    insights,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "summary",
     "pricing",
     "scenario",
+    "insights",
 ]
