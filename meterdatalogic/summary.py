@@ -4,6 +4,7 @@ from typing import cast
 
 from . import canon, utils, transform
 from .types import SummaryPayload, CanonFrame
+from . import insights as insights_mod
 
 
 def summarise(df: CanonFrame) -> SummaryPayload:
@@ -147,4 +148,23 @@ def summarise(df: CanonFrame) -> SummaryPayload:
             },
         },
     )
+    # Attach insights (no external context here)
+    try:
+        _ins = insights_mod.generate_insights(df)
+        payload["insights"] = [
+            {
+                "id": i.id,
+                "level": i.level,
+                "category": i.category,
+                "severity": i.severity,
+                "title": i.title,
+                "message": i.message,
+                "tags": i.tags,
+                "metrics": i.metrics,
+                "extras": i.extras,
+            }
+            for i in _ins
+        ]
+    except Exception:
+        pass
     return payload
