@@ -174,11 +174,40 @@ def compute_billables(
             .rename(columns={"kwh": "export_kwh"})
             .reset_index()
         )
-        export["month"] = utils.month_label(export["t_start"])
+        export["month"] = utils.month_label(export["t_start"])  # type: ignore[arg-type]
         export = export[["month", "export_kwh"]]
 
-        demand = (
-            transform.aggregate(
+        # Base months from export or index range (fallback), else from tou
+        base = export[["month"]].drop_duplicates().copy()
+        if base.empty:
+            idx = pd.DatetimeIndex(df.index)
+            if len(idx):
+                rng = pd.date_range(
+                    idx.min().normalize(), idx.max().normalize(), freq="MS", tz=idx.tz
+                )
+                if len(rng):
+                    base = pd.DataFrame({"month": utils.month_label(rng).values})
+        if base.empty and not tou.empty:
+            base = tou[["month"]].drop_duplicates().copy()
+        if base.empty:
+            # No periods to report
+            cols = [
+                "month",
+                "export_kwh",
+                "demand_kw",
+                *[b.name for b in plan.usage_bands],
+            ]
+            return pd.DataFrame(columns=cols)
+
+        # Ensure ToU rows exist for all base months
+        if tou.empty:
+            tou = base.copy()
+            for b in plan.usage_bands:
+                tou[b.name] = 0.0
+
+        # Demand calculation or zeros aligned to base months
+        if plan.demand:
+            demand = transform.aggregate(
                 df,
                 freq="1MS",
                 flows=["grid_import"],
@@ -189,16 +218,17 @@ def compute_billables(
                 window_end=plan.demand.window_end,
                 window_days=plan.demand.days,  # type: ignore[arg-type]
             )
-            if plan.demand
-            else pd.DataFrame(
-                {"t_start": pd.to_datetime(tou["month"]), "demand_kw": 0.0}
-            )
-        )
-        demand = demand.copy()
-        demand["month"] = utils.month_label(pd.DatetimeIndex(demand.index))
-        demand = demand[["month", "demand_kw"]].reset_index(drop=True)
-        out = tou.merge(export, on="month", how="left").merge(
-            demand, on="month", how="left"
+            demand = demand.copy()
+            demand["month"] = utils.month_label(pd.DatetimeIndex(demand.index))
+            demand = demand[["month", "demand_kw"]].reset_index(drop=True)
+        else:
+            demand = base.copy()
+            demand["demand_kw"] = 0.0
+
+        out = (
+            base.merge(tou, on="month", how="left")
+            .merge(export, on="month", how="left")
+            .merge(demand, on="month", how="left")
         )
         numeric_cols = out.select_dtypes(include="number").columns
         out[numeric_cols] = out[numeric_cols].fillna(0.0)
