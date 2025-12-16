@@ -123,10 +123,23 @@ class SummaryDatasets(TypedDict, total=False):
     months: SeriesBreakdown
 
 
+class InsightItem(TypedDict, total=False):
+    id: str
+    level: Literal["basic", "intermediate", "advanced"]
+    category: Literal["usage", "tariff", "solar", "scenario", "data_quality"]
+    severity: Literal["info", "notice", "warning", "critical"]
+    title: str
+    message: str
+    tags: List[str]
+    metrics: Dict[str, float]
+    extras: Dict[str, float | str]
+
+
 class SummaryPayload(TypedDict, total=False):
     meta: SummaryMeta
     stats: SummaryStats
     datasets: SummaryDatasets
+    insights: List[InsightItem]
 
 
 ## TOU Pricing Models
