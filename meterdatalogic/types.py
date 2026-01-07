@@ -31,7 +31,7 @@ class CanonFrame(pd.DataFrame):
     def channel(self) -> pd.Series:
         return self["channel"]
 
-    @property
+    @property # either 'grid_import', 'controlled_load_import', 'grid_export_solar'
     def flow(self) -> pd.Series:
         return self["flow"]
 
@@ -101,7 +101,7 @@ class TopHours(TypedDict, total=False):
 
 
 class SummaryStats(TypedDict, total=False):
-    total_energy_kwh: float
+    total_import_kwh: float
     per_day_avg_kwh: float
     peak_consumption_kw: float
     peak_time: Optional[str]

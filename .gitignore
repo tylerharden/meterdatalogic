@@ -10,3 +10,4 @@ data/
 *.egg-info/
 *.ruff_cache
 **_cache
+wheels/
