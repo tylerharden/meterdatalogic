@@ -64,7 +64,7 @@ def peak_time_bias(
         return None
     # Average-day profile -> window stats
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
-    total_daily_kwh = float(prof["import_total"].sum()) if len(prof) else 0.0
+    total_daily_kwh = utils.daily_total_from_profile(prof)
     windows = [
         {
             "key": "peak",

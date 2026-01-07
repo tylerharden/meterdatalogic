@@ -26,9 +26,9 @@ def summarise(df: CanonFrame) -> SummaryPayload:
     cadence = int(cadence)
 
     # totals by flow
-    totals = df.groupby("flow")["kwh"].sum().to_dict()
-    total_energy_kwh = float(sum(totals.values()))
-    per_day_avg = (total_energy_kwh / days) if days else 0.0
+    totals = utils.compute_flow_totals(df)
+    total_import_kwh, solar_export_kwh = utils.total_import_export(totals)
+    per_day_avg = (total_import_kwh / days) if days else 0.0
 
     if len(df):
         pos = int(df["kwh"].to_numpy().argmax())
@@ -87,7 +87,7 @@ def summarise(df: CanonFrame) -> SummaryPayload:
 
     # Compute stats using transform helpers
     base_dict = transform.base_from_profile(prof, cadence)
-    total_daily_kwh = float(prof["import_total"].sum()) if len(prof) else 0.0
+    total_daily_kwh = utils.daily_total_from_profile(prof)
     windows_stats = transform.window_stats_from_profile(
         prof, WINDOWS, cadence, total_daily_kwh
     )
@@ -109,10 +109,11 @@ def summarise(df: CanonFrame) -> SummaryPayload:
                 "flows": sorted(df["flow"].unique()) if "flow" in df.columns else [],
             },
             "stats": {
-                "total_energy_kwh": total_energy_kwh,
+                "total_import_kwh": total_import_kwh,
                 "per_day_avg_kwh": float(per_day_avg),
                 "peak_consumption_kw": float(peak_consumption_kw),
                 "peak_time": peak_time,
+                "solar_export_kwh": solar_export_kwh,
                 "peaks": peaks,
                 "base": {
                     "base_kw": base_dict.get("base_kw", 0.0),

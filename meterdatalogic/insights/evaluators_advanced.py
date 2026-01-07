@@ -28,8 +28,8 @@ def ev_impact(
         return None
     sc: ScenarioResult = sc_map["ev"]
     # Annual energy delta
-    before_kwh = float(sc.summary_before.get("stats", {}).get("total_energy_kwh", 0.0))
-    after_kwh = float(sc.summary_after.get("stats", {}).get("total_energy_kwh", 0.0))
+    before_kwh = float(sc.summary_before.get("stats", {}).get("total_import_kwh", 0.0))
+    after_kwh = float(sc.summary_after.get("stats", {}).get("total_import_kwh", 0.0))
     delta_kwh = after_kwh - before_kwh
     # Annual bill delta if available
     cost_before = _annual_total_cost(sc.cost_before)
@@ -41,7 +41,7 @@ def ev_impact(
         prof = transform.profile(
             dfx, by="slot", reducer="mean", include_import_total=True
         )
-        total_daily_kwh = float(prof["import_total"].sum()) if len(prof) else 0.0
+        total_daily_kwh = utils.daily_total_from_profile(prof)
         windows = [
             {
                 "key": "peak",
@@ -147,7 +147,7 @@ def load_shifting_opportunities(
         return None
     # Heuristic: high evening share and low daytime share suggests shifting potential
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
-    total_daily_kwh = float(prof["import_total"].sum()) if len(prof) else 0.0
+    total_daily_kwh = utils.daily_total_from_profile(prof)
     windows = [
         {"key": "evening", "start": "16:00", "end": "21:00"},
         {"key": "daytime", "start": "09:00", "end": "16:00"},
