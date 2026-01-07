@@ -20,13 +20,18 @@ It’s designed to serve as the core analytical engine for the Meter Data Tool (
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create venv and install package with dev dependencies
+# Install dependencies (uv automatically creates and manages .venv)
 cd meterdatalogic
-make venv
+uv sync --all-extras
 
-# Or manually:
-uv venv
-uv pip install -e ".[dev]"
+# Run commands without activating the venv!
+uv run pytest
+uv run ruff check .
+
+# Or use make targets
+make install  # = uv sync --all-extras
+make test     # = uv run pytest -q
+make lint     # = uv run ruff check .
 ```
 
 ### Using pip
@@ -39,8 +44,12 @@ pip install -e ./meterdatalogic[dev]
 pip install pandas numpy nemreader
 ```
 
-> **Why uv?** It's 10-100x faster than pip, has better dependency resolution, and is written in Rust. 
-> Installation time drops from ~60s to ~5s. See [uv documentation](https://docs.astral.sh/uv/) for more.
+> **Why uv?** 
+> - 10-100x faster than pip (installation drops from ~60s to ~5s)
+> - Automatically manages virtual environments (no activation needed!)
+> - Better dependency resolution
+> - Just use `uv run <command>` and it handles everything
+> - See [uv documentation](https://docs.astral.sh/uv/) for more.
 
 ### Requirements
 

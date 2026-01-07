@@ -28,16 +28,10 @@ jobs:
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
     
     - name: Install dependencies
-      run: |
-        uv venv
-        uv pip install -e ".[dev]"
+      run: uv sync --all-extras
     
     - name: Run tests
-      run: |
-        source .venv/bin/activate
-        pytest -q
+      run: uv run pytest -q
     
     - name: Run linter
-      run: |
-        source .venv/bin/activate
-        ruff check .
+      run: uv run ruff check .

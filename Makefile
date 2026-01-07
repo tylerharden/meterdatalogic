@@ -1,32 +1,31 @@
-# Create virtual env and install package + dev tools (using uv - fast!)
-venv:
-	uv venv
-	uv pip install -e ".[dev]"
+# Install dependencies (uv automatically manages .venv)
+install:
+	uv sync --all-extras
 
-# Alternative: Create venv with standard pip
-venv-pip:
+# Alternative: Install in development mode with pip
+install-pip:
 	python3 -m venv .venv
 	. .venv/bin/activate && pip install -e ".[dev]"
 
-# Sync dependencies from pyproject.toml (uv)
-sync:
-	uv pip sync pyproject.toml
+# Run with uv (no activation needed!)
+run:
+	uv run pytest -q
 
-# Run unit tests
+# Run unit tests (uv handles the environment automatically)
 test:
-	pytest -q
+	uv run pytest -q
 
 # Lint & formatting check
 lint:
-	ruff check .
+	uv run ruff check .
 
 # Auto-fix linting issues
 lint-fix:
-	ruff check --fix .
+	uv run ruff check --fix .
 
 # Build package distribution (wheel + sdist)
 build:
-	python3 -m build
+	uv run python -m build
 
 # Clean build artifacts
 clean:
