@@ -49,8 +49,8 @@ def _apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Seri
     times = pd.Series(idx.time, index=idx)
     day_mask = utils.day_mask(idx, ev.days)
 
-    start_t = utils.parse_hhmm(ev.window_start).time()
-    end_t = utils.parse_hhmm(ev.window_end).time()
+    start_t = utils.parse_time_str(ev.window_start)
+    end_t = utils.parse_time_str(ev.window_end)
     win_mask = utils.time_in_range(times, start_t, end_t).to_numpy()
 
     per_int_limit = ev.max_kw * interval_h
@@ -301,16 +301,13 @@ def run(
         cost_after = pricing.estimate_costs(bill_a, plan)
 
     # Deltas & explainables
-    kwh_before = df.groupby("flow")["kwh"].sum()
-    kwh_after = (
-        df_after.groupby("flow")["kwh"].sum()
-        if len(df_after)
-        else pd.Series(dtype=float)
-    )
-    import_b = float(kwh_before.get("grid_import", 0.0))
-    export_b = float(kwh_before.get("grid_export_solar", 0.0))
-    import_a = float(kwh_after.get("grid_import", 0.0))
-    export_a = float(kwh_after.get("grid_export_solar", 0.0))
+    flow_before = utils.compute_flow_totals(df)
+    flow_after = utils.compute_flow_totals(df_after) if len(df_after) else {}
+    
+    import_b = flow_before.get("grid_import", 0.0)
+    export_b = flow_before.get("grid_export_solar", 0.0)
+    import_a = flow_after.get("grid_import", 0.0)
+    export_a = flow_after.get("grid_export_solar", 0.0)
     delta = {
         "import_kwh_delta": import_a - import_b,
         "export_kwh_delta": export_a - export_b,
@@ -342,6 +339,6 @@ def run(
         summary_after=summary_after,
         cost_before=cost_before,
         cost_after=cost_after,
-        delta=ScenarioDelta(**delta),
+        delta=cast(ScenarioDelta, delta),
         explain=cast(ScenarioExplain, explain),
     )

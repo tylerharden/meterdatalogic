@@ -1,21 +1,34 @@
 from __future__ import annotations
 import pandas as pd
-from typing import IO, Optional, cast
+from typing import IO, Optional, cast, TYPE_CHECKING, Any
 
 from . import canon, utils, validate
 from .types import CanonFrame
 
-try:
+if TYPE_CHECKING:
     from nemreader import NEMFile
-except Exception:
-    NEMFile = None
+else:
+    try:
+        from nemreader import NEMFile
+    except Exception:
+        NEMFile = None  # type: ignore[assignment,misc]
 
 
 def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("Index must be a DatetimeIndex.")
+    
+    if df.empty:
+        # Return empty dataframe with cadence_min column
+        df["cadence_min"] = pd.Series(dtype=int)
+        return df
 
     gcols = ["nmi", "channel"]
+    
+    # Verify required columns exist
+    missing_cols = [col for col in gcols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"DataFrame missing required columns: {missing_cols}")
 
     def _infer_group_cadence(g: pd.DataFrame) -> int:
         return int(
@@ -32,7 +45,25 @@ def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
         )  # pandas >=2.2
     except TypeError:
         cad_series = gb.apply(_infer_group_cadence)
-    cad_per_group = cad_series.rename("cadence_min").reset_index()
+    
+    # Ensure the result is a Series with proper index
+    # Handle empty results or unexpected shapes
+    if isinstance(cad_series, pd.DataFrame):
+        # If apply returned a DataFrame instead of Series, extract the first column
+        if not cad_series.empty:
+            cad_series = cad_series.iloc[:, 0]
+        else:
+            # Empty DataFrame - create empty Series with proper structure
+            cad_series = pd.Series(dtype=int, name="cadence_min")
+    elif not isinstance(cad_series, pd.Series):
+        # Convert to Series if it's some other type
+        try:
+            cad_series = pd.Series(cad_series, name="cadence_min")
+        except Exception:
+            # Last resort: create empty Series
+            cad_series = pd.Series(dtype=int, name="cadence_min")
+    
+    cad_per_group = cad_series.to_frame("cadence_min").reset_index()
 
     out = (
         df.reset_index()

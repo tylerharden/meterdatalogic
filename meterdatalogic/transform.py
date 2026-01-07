@@ -252,12 +252,12 @@ def window_stats_from_profile(
     """
 
     def hhmm_to_minutes(hhmm: str) -> int:
-        h, m = hhmm.split(":")
-        h = int(h)
-        m = int(m)
-        if h == 24 and m == 0:
+        h_str, m_str = hhmm.split(":")
+        h_int = int(h_str)
+        m_int = int(m_str)
+        if h_int == 24 and m_int == 0:
             return 24 * 60
-        return h * 60 + m
+        return h_int * 60 + m_int
 
     total = (
         float(total_daily_kwh)
@@ -378,11 +378,7 @@ def period_breakdown(
         df, freq=freq, groupby="flow", pivot=True, value_col="kwh", flows=flows
     ).reset_index()
     totals = totals.rename(columns={"t_start": labels})
-    if labels == "day":
-        totals[labels] = pd.DatetimeIndex(totals[labels]).strftime("%Y-%m-%d")
-    else:
-        # Assign values (avoid index alignment producing NaN)
-        totals[labels] = utils.month_label(pd.DatetimeIndex(totals[labels])).values
+    totals[labels] = utils.format_period_label(totals[labels], freq)
     flow_cols = [c for c in totals.columns if c != labels]
     totals["total_kwh"] = totals[flow_cols].select_dtypes(float).sum(axis=1)
 
@@ -390,17 +386,11 @@ def period_breakdown(
         df, freq=freq, value_col="kwh", agg="max", flows=flows
     ).reset_index()
     peaks = peaks.rename(columns={"t_start": labels, "kwh": "peak_interval_kwh"})
-    if labels == "day":
-        peaks[labels] = pd.DatetimeIndex(peaks[labels]).strftime("%Y-%m-%d")
-    else:
-        peaks[labels] = utils.month_label(pd.DatetimeIndex(peaks[labels])).values
+    peaks[labels] = utils.format_period_label(peaks[labels], freq)
 
     avg = aggregate(df, freq=freq, metric="kW", stat="mean", flows=flows).reset_index()
     avg = avg.rename(columns={"t_start": labels, "demand_kw": "mean_kw"})
-    if labels == "day":
-        avg[labels] = pd.DatetimeIndex(avg[labels]).strftime("%Y-%m-%d")
-    else:
-        avg[labels] = utils.month_label(pd.DatetimeIndex(avg[labels])).values
+    avg[labels] = utils.format_period_label(avg[labels], freq)
     if cadence_min:
         avg["avg_interval_kwh"] = avg["mean_kw"] * (cadence_min / 60.0)
     else:

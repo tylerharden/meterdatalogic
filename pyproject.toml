@@ -25,7 +25,8 @@ dev = [
   "ipykernel",
   "build",
   "plotly",
-  "nbformat"
+  "nbformat",
+  "pandas-stubs>=2.0.0",
 ]
 
 [tool.ruff]
