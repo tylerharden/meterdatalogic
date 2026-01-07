@@ -23,17 +23,45 @@ def assert_canon(df: pd.DataFrame) -> None:
 
 
 def validate_nmi(df: pd.DataFrame, nmi: Optional[int] = None) -> pd.DataFrame:
-    """Validates that data contains a single NMI or raises an error."""
+    """
+    Validate that DataFrame contains a single NMI, or filter to specified NMI.
+
+    Args:
+        df: DataFrame with 'nmi' column
+        nmi: Optional NMI to filter to. If None and multiple NMIs exist, raises error.
+
+    Returns:
+        DataFrame filtered to single NMI
+
+    Raises:
+        ValueError: If multiple NMIs found without specifying which one to use,
+                   or if specified NMI not found in data
+    
+    Example:
+        >>> df = validate_nmi(multi_site_df, nmi=1234567890)
+    """
+    if "nmi" not in df.columns:
+        raise ValueError("DataFrame does not have 'nmi' column")
+    
     nmis = df["nmi"].unique()
     if len(nmis) > 1:
         if nmi is None:
             raise ValueError(
                 f"Multiple NMIs detected: {', '.join(map(str, nmis))}. Please specify an NMI."
             )
-        if nmi not in nmis:
+        # Convert nmis to Python ints for comparison to avoid numpy type issues
+        nmis_as_ints = [int(n) for n in nmis]
+        if nmi not in nmis_as_ints:
             raise ValueError(
                 f"Specified NMI {nmi} is not in the dataset. Available NMIs: {', '.join(map(str, nmis))}"
             )
         # Filter the dataframe by the specified NMI
-        df = df[df["nmi"] == nmi]
+        # Handle both string and int NMI columns by converting to int for comparison
+        filtered = df[df["nmi"].astype(int) == nmi].copy()
+        
+        # Ensure the filtered dataframe is not empty
+        if filtered.empty:
+            raise ValueError(f"No data found for NMI {nmi} after filtering")
+        
+        return filtered
     return df
