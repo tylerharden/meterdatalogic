@@ -1,7 +1,16 @@
-# Create virtual env and install package + dev tools
+# Create virtual env and install package + dev tools (using uv - fast!)
 venv:
+	uv venv
+	uv pip install -e ".[dev]"
+
+# Alternative: Create venv with standard pip
+venv-pip:
 	python3 -m venv .venv
 	. .venv/bin/activate && pip install -e ".[dev]"
+
+# Sync dependencies from pyproject.toml (uv)
+sync:
+	uv pip sync pyproject.toml
 
 # Run unit tests
 test:

@@ -14,6 +14,23 @@ It’s designed to serve as the core analytical engine for the Meter Data Tool (
 
 ## Install
 
+### Using uv (recommended - much faster!)
+
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create venv and install package with dev dependencies
+cd meterdatalogic
+make venv
+
+# Or manually:
+uv venv
+uv pip install -e ".[dev]"
+```
+
+### Using pip
+
 ```bash
 # From this repo (editable install for development)
 pip install -e ./meterdatalogic[dev]
@@ -21,6 +38,9 @@ pip install -e ./meterdatalogic[dev]
 # Or bring your own env with deps
 pip install pandas numpy nemreader
 ```
+
+> **Why uv?** It's 10-100x faster than pip, has better dependency resolution, and is written in Rust. 
+> Installation time drops from ~60s to ~5s. See [uv documentation](https://docs.astral.sh/uv/) for more.
 
 ### Requirements
 

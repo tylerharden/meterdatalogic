@@ -11,3 +11,6 @@ data/
 *.ruff_cache
 **_cache
 wheels/
+.uv_cache
+uv.lock
+requirements.txt
