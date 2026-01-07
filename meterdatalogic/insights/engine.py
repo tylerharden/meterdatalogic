@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List, Optional
 
 from .types import Insight, InsightContext, InsightEvaluator
 from .config import InsightConfig, default_config
 from ..types import CanonFrame
+
+logger = logging.getLogger(__name__)
 
 # Import evaluator groups
 from .evaluators_basic import (
@@ -71,7 +74,12 @@ def generate_insights(
     for ev in evaluators:
         try:
             results.append(ev(df, config=cfg, context=context))
-        except Exception:
+        except Exception as e:
             # Be defensive: one failing evaluator shouldn't block others.
+            ev_name = getattr(ev, "__name__", ev.__class__.__name__)
+            logger.debug(
+                f"Insight evaluator {ev_name} failed: {e}",
+                exc_info=True
+            )
             continue
     return _flatten(results)
