@@ -27,6 +27,7 @@ dev = [
   "plotly",
   "nbformat",
   "pandas-stubs>=2.0.0",
+  "twine",  # For publishing to PyPI
 ]
 
 [tool.ruff]

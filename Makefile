@@ -32,3 +32,24 @@ clean:
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +
 	find . -name '*.py[co]' -delete
 	rm -rf dist build *.egg-info .ruff_cache .pytest_cache
+
+# Version bumping (creates commit + tag)
+bump-patch:
+	./scripts/bump_version.sh patch
+
+bump-minor:
+	./scripts/bump_version.sh minor
+
+bump-major:
+	./scripts/bump_version.sh major
+
+# Build and publish to PyPI (requires PyPI token)
+publish: clean build
+	@echo "Publishing to PyPI..."
+	uv run twine upload dist/*
+
+# Create GitHub release (requires gh CLI)
+release:
+	@echo "Creating GitHub release..."
+	@VERSION=$$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/'); \
+	gh release create v$$VERSION --generate-notes --latest

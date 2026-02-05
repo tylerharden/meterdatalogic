@@ -77,38 +77,54 @@ Key principles:
 
 ---
 
+## Documentation
+
+Comprehensive documentation is available in the [docs/](docs/) folder:
+
+- **[Getting Started](docs/guides/setup_environment.md)** - Installation and setup
+- **[Examples & Use Cases](docs/guides/examples.md)** - Practical recipes
+- **[API Reference](docs/reference/api-reference.md)** - Complete API documentation
+- **[Feature Guides](docs/features/)** - Deep dives into insights, scenarios, validation
+- **[Contributing](docs/guides/contributing.md)** - Developer guide
+
+---
+
 ## Project Structure
 
 ```
 meterdatalogic/
   __init__.py
-  canon.py
-  types.py
-  exceptions.py
-  utils.py
-  ingest.py
-  validate.py
-  transform.py
-  summary.py
-  pricing.py
-  scenario.py
-tests/
-  ...
+  canon.py          # Canonical schema definitions
+  types.py          # Type definitions (CanonFrame, Plan, etc.)
+  exceptions.py     # CanonError exception
+  utils.py          # Helper functions
+  ingest.py         # Data loading (NEM12, CSV, DataFrame)
+  validate.py       # Schema validation
+  transform.py      # Aggregation, ToU binning
+  summary.py        # JSON-ready summaries
+  pricing.py        # Tariff calculations
+  scenario.py       # Solar/battery/EV modeling
+  formats.py        # Format conversion
+  insights/         # Pattern detection & recommendations
+    __init__.py
+    engine.py       # Insight generation orchestration
+    config.py       # Configuration and thresholds
+    types.py        # Insight type definitions
+    evaluators_*.py # Evaluator functions
+tests/              # Test suite
+docs/               # Documentation
 ```
 
 ### Module Overview
 
-- canon.py — Canonical schema constants (index name, default TZ/cadence, channel→flow mappings).
-- types.py — TypedDict/dataclass types (ToU bands, DemandCharge, Plan, EV/PV/Battery configs).
-- exceptions.py — Domain-specific error classes (CanonError, TransformError, PricingError, ScenarioError, etc.) and require().
-- utils.py — General helpers (month_label, build_canon_frame).
-- ingest.py — Normalise raw data to canonical shape (from_dataframe, from_nem12).
-- validate.py — Enforce canonical invariants (assert_canon, ensure).
-- transform.py — Unified `aggregate(...)` for resampling/grouping and `tou_bins(...)` for ToU; helpers `profile(...)`, `period_breakdown(...)`, `base_from_profile(...)`, `window_stats_from_profile(...)`, `peak_from_profile(...)`, `top_n_from_profile(...)`.
-- summary.py — JSON-ready payloads (energy totals, per-day avg, peaks, profile24, months).
-- pricing.py — Unified billing API: `compute_billables(..., mode='monthly'|'cycles')` and `estimate_costs(...)`.
-- scenario.py — EV/PV/Battery simulation and orchestration (run).
-- insights/ — Config-driven insights & recommendations API (`generate_insights`) using canonical data, pricing, and scenarios.
+- **ingest** — Load NEM12, CSV, or DataFrame to canonical format
+- **validate** — Enforce schema rules (tz-aware, sorted, unique timestamps)
+- **transform** — Aggregate by time/ToU, calculate profiles and peaks
+- **summary** — Generate JSON-ready summaries for dashboards
+- **pricing** — Calculate billables and costs from tariff plans
+- **scenario** — Model solar PV, battery storage, and EV charging
+- **insights** — Automated pattern detection and recommendations
+- **formats** — Convert between CanonFrame and JSON representations
 
 ---
 
@@ -243,20 +259,110 @@ result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
 ## Testing
 
 ```bash
-pytest -q
+# Run all tests
+uv run pytest
+# or
+make test
+
+# Run with coverage
+uv run pytest --cov=meterdatalogic
+
+# Run specific test file
+uv run pytest tests/test_transform.py
 ```
 
 ---
 
-## Releasing (GitHub Actions)
+## Development
 
-We use semantic version tags vX.Y.Z and a release workflow that builds artifacts.
+```bash
+# Lint code
+make lint
+# or
+uv run ruff check .
 
-Steps:
-1) Bump the version in pyproject.toml ([project.version]).
-2) Create a Git tag vX.Y.Z and push, or run the “Release meterdatalogic” workflow with an input version.
-3) The workflow builds wheel and sdist (dist/*.whl, *.tar.gz) and publishes a GitHub Release with assets.
+# Format code
+uv run ruff format .
 
-Notes:
-- Ensure pyproject version matches the tag. The workflow validates this.
-- If you target AWS Lambda layers or Linux/aarch64, build wheels in a compatible environment (e.g., AWS SAM python3.12 aarch64 image) before publishing a layer.
+# Run pre-commit hooks
+uv run pre-commit run --all-files
+```
+
+See [Contributing Guide](docs/guides/contributing.md) for detailed development workflow.
+
+---
+
+## Releasing
+
+Releases are automated via GitHub Actions with PyPI trusted publishing.
+
+### Quick Release
+
+```bash
+# 1. Bump version
+make bump-patch   # 0.1.4 → 0.1.5
+make bump-minor   # 0.1.4 → 0.2.0
+make bump-major   # 0.1.4 → 1.0.0
+
+# 2. Push to GitHub
+git push && git push --tags
+```
+
+### What Happens Automatically
+
+When you push a tag (e.g., `v0.1.5`):
+
+1. ✅ GitHub Actions builds the package (wheel + sdist)
+2. ✅ **Publishes to PyPI** using trusted publishing (no token needed!)
+3. ✅ Creates GitHub Release with artifacts
+4. ✅ Detects pre-releases (alpha, beta, rc) automatically
+
+### Pre-releases
+
+Support for alpha, beta, and release candidates:
+
+```bash
+# Update version in pyproject.toml
+version = "0.1.5-alpha"
+
+# Tag and push
+git tag v0.1.5-alpha
+git push --tags
+```
+
+Pre-releases are marked as such on both GitHub and PyPI. Users can install with:
+```bash
+pip install --pre meterdatalogic
+```
+
+### PyPI Setup (One-time)
+
+For automated publishing, configure PyPI trusted publishing:
+
+1. Go to https://pypi.org/manage/account/publishing/
+2. Add a new publisher:
+   - **PyPI project name**: `meterdatalogic`
+   - **Owner**: `tylerharden`
+   - **Repository**: `meterdatalogic`
+   - **Workflow**: `release.yml`
+   - **Environment**: (leave blank)
+
+No API tokens needed! See [Release Workflow docs](docs/releasing-workflow.md) for details.
+
+---
+
+## Installation from PyPI
+
+Once published:
+
+```bash
+# Install latest stable version
+pip install meterdatalogic
+
+# Install with optional dependencies
+pip install meterdatalogic[dev]  # Development tools
+pip install meterdatalogic[nem12]  # NEM12 support
+
+# Install pre-release versions
+pip install --pre meterdatalogic
+```

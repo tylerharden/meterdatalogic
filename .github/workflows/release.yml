@@ -12,6 +12,7 @@ on:
 
 permissions:
     contents: write
+    id-token: write  # Required for PyPI trusted publishing
 
 jobs:
     build-and-release:
@@ -32,6 +33,15 @@ jobs:
                   fi
                   echo "version=$V" >> $GITHUB_OUTPUT
                   echo "Release version: $V"
+                  
+                  # Detect pre-release (alpha, beta, rc, dev, a, b, etc.)
+                  if echo "$V" | grep -qE '(alpha|beta|rc|dev|a[0-9]|b[0-9])'; then
+                    echo "is_prerelease=true" >> $GITHUB_OUTPUT
+                    echo "Detected pre-release version"
+                  else
+                    echo "is_prerelease=false" >> $GITHUB_OUTPUT
+                    echo "Detected stable release"
+                  fi
 
             - name: Verify pyproject version matches
               run: |
@@ -63,13 +73,18 @@ jobs:
                   git tag -a "v${{ steps.ver.outputs.version }}" -m "Release v${{ steps.ver.outputs.version }}"
                   git push origin "v${{ steps.ver.outputs.version }}"
 
+            - name: Publish to PyPI
+              uses: pypa/gh-action-pypi-publish@release/v1
+              with:
+                  print-hash: true
+
             - name: Create GitHub Release
               uses: softprops/action-gh-release@v2
               with:
                   tag_name: v${{ steps.ver.outputs.version }}
                   name: v${{ steps.ver.outputs.version }}
                   draft: false
-                  prerelease: false
+                  prerelease: ${{ steps.ver.outputs.is_prerelease }}
                   files: |
                       dist/*.whl
                       dist/*.tar.gz
