@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 -
 
+## [0.1.6] - 2026-02-05
+
+### Fixed
+- Fixed pandas 2.2+ compatibility with lowercase frequency strings (`"h"` instead of `"H"`)
+
 ## [0.1.5] - 2026-02-05
 
 ### Added
