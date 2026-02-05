@@ -31,7 +31,8 @@ build:
 clean:
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +
 	find . -name '*.py[co]' -delete
-	rm -rf dist build *.egg-info .ruff_cache .pytest_cache
+	rm -rf dist build *.egg-info .ruff_cache .pytest_cache .mypy_cache
+	rm -rf htmlcov .coverage .coverage.* coverage.xml
 
 # Version bumping (creates commit + tag)
 bump-patch:

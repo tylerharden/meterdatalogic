@@ -14,3 +14,11 @@ wheels/
 .uv_cache
 uv.lock
 requirements.txt
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.pytest_cache/
