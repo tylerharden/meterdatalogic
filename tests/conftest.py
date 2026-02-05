@@ -22,7 +22,7 @@ def tz_sydney():
 def rng_dst_gap(tz_sydney):
     """A tz-aware hourly range through the DST 'gap' day (one hour skipped)."""
     # Spring forward: 2024-10-06 02:00 local is skipped in Australia/Sydney.
-    return pd.date_range("2024-10-06 00:00", periods=6, freq="H", tz=tz_sydney)
+    return pd.date_range("2024-10-06 00:00", periods=6, freq="h", tz=tz_sydney)
 
 
 @pytest.fixture

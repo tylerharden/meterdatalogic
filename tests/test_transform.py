@@ -114,7 +114,7 @@ def test_resample_energy_no_warning(canon_df_one_nmi, recwarn):
     """Resampling should not emit FutureWarnings from groupby/resample chain."""
     df = ingest.from_dataframe(canon_df_one_nmi)
     _ = transform.aggregate(
-        df, freq="1H", groupby=["nmi", "channel", "flow"], value_col="kwh", pivot=False
+        df, freq="1h", groupby=["nmi", "channel", "flow"], value_col="kwh", pivot=False
     )
     assert not any("FutureWarning" in str(w.message) for w in recwarn.list)
 
