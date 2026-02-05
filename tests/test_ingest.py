@@ -15,9 +15,7 @@ def test_from_dataframe_produces_canon(canon_df_one_nmi):
 
 
 def test_from_dataframe_infers_cadence(canon_df_one_nmi):
-    out = ingest.from_dataframe(
-        canon_df_one_nmi.drop(columns=[], errors="ignore"), tz=TZ
-    )
+    out = ingest.from_dataframe(canon_df_one_nmi.drop(columns=[], errors="ignore"), tz=TZ)
     assert out["cadence_min"].iloc[0] == 30  # 30min cadence inferred
 
 

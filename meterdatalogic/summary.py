@@ -20,9 +20,7 @@ def summarise(df: CanonFrame) -> SummaryPayload:
     end = idx.max()
     days = int((end - start).days) + 1 if pd.notna(start) and pd.notna(end) else 0
 
-    cadence = utils.infer_cadence_minutes(
-        pd.DatetimeIndex(idx), default=canon.DEFAULT_CADENCE_MIN
-    )
+    cadence = utils.infer_cadence_minutes(pd.DatetimeIndex(idx), default=canon.DEFAULT_CADENCE_MIN)
     cadence = int(cadence)
 
     # totals by flow
@@ -48,18 +46,14 @@ def summarise(df: CanonFrame) -> SummaryPayload:
 
     # Monthly and daily energy by flow (pivoted columns)
     # Daily and monthly breakdowns
-    daily_bd = transform.period_breakdown(
-        df, freq="1D", cadence_min=cadence, labels="day"
-    )
-    monthly_bd = transform.period_breakdown(
-        df, freq="1MS", cadence_min=cadence, labels="month"
-    )
+    daily_bd = transform.period_breakdown(df, freq="1D", cadence_min=cadence, labels="day")
+    monthly_bd = transform.period_breakdown(df, freq="1MS", cadence_min=cadence, labels="month")
     days_df = daily_bd["total"]
     months_df = monthly_bd["total"]
 
     # Enrich daily/monthly frames with total/average/peak columns
     # Average is per-interval average using inferred cadence and covered periods
-    intervals_per_day = int(round(1440 / cadence)) if cadence else 0
+    # intervals_per_day = int(round(1440 / cadence)) if cadence else 0
 
     # Merge peaks/average columns from breakdowns
     if not days_df.empty:
@@ -73,13 +67,25 @@ def summarise(df: CanonFrame) -> SummaryPayload:
     # Pylance-friendly typed records
     prof_records: list[dict[str, float | str]] = prof.to_dict(orient="records")  # type: ignore[assignment]
     # Split days/months into separate lists for total/peaks/average
-    days_total_records: list[dict[str, float | str]] = days_df.to_dict(orient="records") if not days_df.empty else []  # type: ignore[assignment]
-    days_peaks_records: list[dict[str, float | str]] = daily_bd["peaks"].to_dict(orient="records") if not daily_bd["peaks"].empty else []  # type: ignore[assignment]
-    days_avg_records: list[dict[str, float | str]] = daily_bd["average"].to_dict(orient="records") if not daily_bd["average"].empty else []  # type: ignore[assignment]
+    days_total_records: list[dict[str, float | str]] = (
+        days_df.to_dict(orient="records") if not days_df.empty else []
+    )  # type: ignore[assignment]
+    days_peaks_records: list[dict[str, float | str]] = (
+        daily_bd["peaks"].to_dict(orient="records") if not daily_bd["peaks"].empty else []
+    )  # type: ignore[assignment]
+    days_avg_records: list[dict[str, float | str]] = (
+        daily_bd["average"].to_dict(orient="records") if not daily_bd["average"].empty else []
+    )  # type: ignore[assignment]
 
-    months_total_records: list[dict[str, float | str]] = months_df.to_dict(orient="records") if not months_df.empty else []  # type: ignore[assignment]
-    months_peaks_records: list[dict[str, float | str]] = monthly_bd["peaks"].to_dict(orient="records") if not monthly_bd["peaks"].empty else []  # type: ignore[assignment]
-    months_avg_records: list[dict[str, float | str]] = monthly_bd["average"].to_dict(orient="records") if not monthly_bd["average"].empty else []  # type: ignore[assignment]
+    months_total_records: list[dict[str, float | str]] = (
+        months_df.to_dict(orient="records") if not months_df.empty else []
+    )  # type: ignore[assignment]
+    months_peaks_records: list[dict[str, float | str]] = (
+        monthly_bd["peaks"].to_dict(orient="records") if not monthly_bd["peaks"].empty else []
+    )  # type: ignore[assignment]
+    months_avg_records: list[dict[str, float | str]] = (
+        monthly_bd["average"].to_dict(orient="records") if not monthly_bd["average"].empty else []
+    )  # type: ignore[assignment]
 
     # Ensure explicit str types for start/end
     start_str: str = str(start) if pd.notna(start) else ""
@@ -88,9 +94,7 @@ def summarise(df: CanonFrame) -> SummaryPayload:
     # Compute stats using transform helpers
     base_dict = transform.base_from_profile(prof, cadence)
     total_daily_kwh = utils.daily_total_from_profile(prof)
-    windows_stats = transform.window_stats_from_profile(
-        prof, WINDOWS, cadence, total_daily_kwh
-    )
+    windows_stats = transform.window_stats_from_profile(prof, WINDOWS, cadence, total_daily_kwh)
     peak_consumption_kw, peak_time = transform.peak_from_profile(prof, cadence)
     topn = transform.top_n_from_profile(prof, n=4, total_value=total_daily_kwh)
 
@@ -103,9 +107,7 @@ def summarise(df: CanonFrame) -> SummaryPayload:
                 "end": end_str,
                 "cadence_min": cadence,
                 "days": days,
-                "channels": (
-                    sorted(df["channel"].unique()) if "channel" in df.columns else []
-                ),
+                "channels": (sorted(df["channel"].unique()) if "channel" in df.columns else []),
                 "flows": sorted(df["flow"].unique()) if "flow" in df.columns else [],
             },
             "stats": {
@@ -119,10 +121,7 @@ def summarise(df: CanonFrame) -> SummaryPayload:
                     "base_kw": base_dict.get("base_kw", 0.0),
                     "base_kwh_per_day": base_dict.get("base_kwh_per_day", 0.0),
                     "share_of_daily_pct": float(
-                        (
-                            (base_dict.get("base_kwh_per_day", 0.0) / total_daily_kwh)
-                            * 100.0
-                        )
+                        ((base_dict.get("base_kwh_per_day", 0.0) / total_daily_kwh) * 100.0)
                         if total_daily_kwh > 0
                         else 0.0
                     ),

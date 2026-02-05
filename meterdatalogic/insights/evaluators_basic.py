@@ -119,9 +119,7 @@ def data_completeness(
     end = idx.max().normalize()
     days = int((end - start).days) + 1
     expected_intervals = int(days * (1440 // cadence_min))
-    coverage = (
-        (len(idx) / expected_intervals * 100.0) if expected_intervals > 0 else 0.0
-    )
+    coverage = (len(idx) / expected_intervals * 100.0) if expected_intervals > 0 else 0.0
 
     if coverage < config.basic.min_coverage_pct:
         return Insight(
@@ -140,9 +138,7 @@ def data_completeness(
         level="basic",
         category="data_quality",
         title="Good data coverage",
-        message=(
-            f"Coverage is ~{coverage:.0f}% across {days} days; insights based on solid data."
-        ),
+        message=(f"Coverage is ~{coverage:.0f}% across {days} days; insights based on solid data."),
         severity="info",  # type: ignore[arg-type]
         metrics={"coverage_pct": float(coverage)},
     )

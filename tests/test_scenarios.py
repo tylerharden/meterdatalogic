@@ -12,9 +12,7 @@ from meterdatalogic import utils
 @pytest.fixture
 def day_30min():
     """One local day at 30‑min cadence (Brisbane, no DST)."""
-    return pd.date_range(
-        "2025-01-01", periods=48, freq="30min", tz="Australia/Brisbane"
-    )
+    return pd.date_range("2025-01-01", periods=48, freq="30min", tz="Australia/Brisbane")
 
 
 @pytest.fixture
@@ -168,9 +166,7 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
 
     monkeypatch.setattr(scenario, "_apply_ev", fake_ev, raising=True)
     monkeypatch.setattr(scenario, "_apply_pv", fake_pv, raising=True)
-    monkeypatch.setattr(
-        scenario, "_apply_battery_self_consume", fake_batt, raising=True
-    )
+    monkeypatch.setattr(scenario, "_apply_battery_self_consume", fake_batt, raising=True)
 
     called = {"pricing": False}
 
@@ -181,13 +177,9 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
     def fake_price_accept_kwargs(d, plan, **kwargs):
         return fake_price(d, plan)
 
-    monkeypatch.setattr(
-        scenario.pricing, "estimate_costs", fake_price_accept_kwargs, raising=True
-    )
+    monkeypatch.setattr(scenario.pricing, "estimate_costs", fake_price_accept_kwargs, raising=True)
 
-    plan = mdtypes.Plan(
-        usage_bands=[], fixed_c_per_day=0.0, feed_in_c_per_kwh=0.0, demand=None
-    )
+    plan = mdtypes.Plan(usage_bands=[], fixed_c_per_day=0.0, feed_in_c_per_kwh=0.0, demand=None)
 
     if not hasattr(scenario, "run"):
         pytest.skip("scenario.run not available")

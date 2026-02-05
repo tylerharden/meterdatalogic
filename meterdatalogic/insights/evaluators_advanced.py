@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Optional
 import pandas as pd
 
 from .types import Insight, InsightContext
@@ -38,9 +38,7 @@ def ev_impact(
 
     # Rough attribution of charging time: compare peak-window import share before/after
     def _peak_share(dfx: pd.DataFrame) -> float:
-        prof = transform.profile(
-            dfx, by="slot", reducer="mean", include_import_total=True
-        )
+        prof = transform.profile(dfx, by="slot", reducer="mean", include_import_total=True)
         total_daily_kwh = utils.daily_total_from_profile(prof)
         windows = [
             {
@@ -98,9 +96,7 @@ def battery_impact(
     sc: ScenarioResult = sc_map["battery"]
 
     def _window_kwh(dfx: pd.DataFrame) -> float:
-        prof = transform.profile(
-            dfx, by="slot", reducer="mean", include_import_total=True
-        )
+        prof = transform.profile(dfx, by="slot", reducer="mean", include_import_total=True)
         stats = transform.window_stats_from_profile(
             prof,
             [

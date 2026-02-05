@@ -122,9 +122,7 @@ def test_feed_in_credit_negative(halfhour_rng, monkeypatch):
     assert "export_kwh" in bill.columns  # monthly export aggregation included
     assert (cost["feed_in_credit"] <= 0).all()
     # Total must equal sum of components.
-    recomputed = cost[
-        ["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]
-    ].sum(axis=1)
+    recomputed = cost[["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]].sum(axis=1)
     assert (abs(recomputed - cost["total"]) < 1e-9).all()
 
 

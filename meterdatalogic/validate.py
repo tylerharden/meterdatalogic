@@ -17,9 +17,7 @@ def assert_canon(df: pd.DataFrame) -> None:
     if not df.index.is_monotonic_increasing:
         raise exceptions.CanonError("Index must be sorted ascending.")
     if (df["kwh"] < 0).any():
-        raise exceptions.CanonError(
-            "Negative kWh values detected; energy should be non-negative."
-        )
+        raise exceptions.CanonError("Negative kWh values detected; energy should be non-negative.")
 
 
 def validate_nmi(df: pd.DataFrame, nmi: Optional[int] = None) -> pd.DataFrame:
@@ -36,13 +34,13 @@ def validate_nmi(df: pd.DataFrame, nmi: Optional[int] = None) -> pd.DataFrame:
     Raises:
         ValueError: If multiple NMIs found without specifying which one to use,
                    or if specified NMI not found in data
-    
+
     Example:
         >>> df = validate_nmi(multi_site_df, nmi=1234567890)
     """
     if "nmi" not in df.columns:
         raise ValueError("DataFrame does not have 'nmi' column")
-    
+
     nmis = df["nmi"].unique()
     if len(nmis) > 1:
         if nmi is None:
@@ -58,10 +56,10 @@ def validate_nmi(df: pd.DataFrame, nmi: Optional[int] = None) -> pd.DataFrame:
         # Filter the dataframe by the specified NMI
         # Handle both string and int NMI columns by converting to int for comparison
         filtered = df[df["nmi"].astype(int) == nmi].copy()
-        
+
         # Ensure the filtered dataframe is not empty
         if filtered.empty:
             raise ValueError(f"No data found for NMI {nmi} after filtering")
-        
+
         return filtered
     return df

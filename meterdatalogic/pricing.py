@@ -40,8 +40,7 @@ def _label_cycles(
     starts = pd.DatetimeIndex([starts[i] for i in order]).tz_convert(tz)
     ends = pd.DatetimeIndex([ends[i] for i in order]).tz_convert(tz)
     labels = [
-        f"{starts[i].date()}→{(ends[i] - pd.Timedelta(days=1)).date()}"
-        for i in range(len(starts))
+        f"{starts[i].date()}→{(ends[i] - pd.Timedelta(days=1)).date()}" for i in range(len(starts))
     ]
 
     # map each ts to the last start <= ts using searchsorted
@@ -132,9 +131,7 @@ def _cycle_billables(
         demand = pd.DataFrame({"cycle": tou["cycle"].unique(), "demand_kw": 0.0})
 
     # ---- MERGE ----
-    out = tou.merge(export, on="cycle", how="left").merge(
-        demand, on="cycle", how="left"
-    )
+    out = tou.merge(export, on="cycle", how="left").merge(demand, on="cycle", how="left")
     numeric_cols = out.select_dtypes(include="number").columns
     out[numeric_cols] = out[numeric_cols].fillna(0.0)
 
@@ -261,9 +258,7 @@ def estimate_costs(
 
     # Demand cost
     out["demand_cost"] = (
-        out.get("demand_kw", 0.0) * plan.demand.rate_per_kw_per_month
-        if plan.demand
-        else 0.0
+        out.get("demand_kw", 0.0) * plan.demand.rate_per_kw_per_month if plan.demand else 0.0
     )
 
     # Fixed cost
@@ -296,17 +291,13 @@ def estimate_costs(
             out[col] = 0.0
 
     # Feed-in credit (negative)
-    out["feed_in_credit"] = (
-        out["export_kwh"] * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
+    out["feed_in_credit"] = out["export_kwh"] * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
+
+    out["subtotal"] = out[["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]].sum(
+        axis=1
     )
 
-    out["subtotal"] = out[
-        ["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]
-    ].sum(axis=1)
-
-    charges_only = (out["energy_cost"] + out["demand_cost"] + out["fixed_cost"]).round(
-        2
-    )
+    charges_only = (out["energy_cost"] + out["demand_cost"] + out["fixed_cost"]).round(2)
     out["pay_on_time_discount"] = -(charges_only * float(pay_on_time_discount)).round(2)
 
     if include_gst:

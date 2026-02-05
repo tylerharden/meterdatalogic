@@ -23,14 +23,10 @@ def seasonal_variation(
     flow_cols = [c for c in monthly.columns if c not in ("month", "total_kwh", "mm")]
     monthly["import_kwh"] = monthly[flow_cols].select_dtypes(float).sum(axis=1)
     warm = float(
-        monthly.loc[
-            monthly["mm"].isin(config.intermediate.warm_months), "import_kwh"
-        ].sum()
+        monthly.loc[monthly["mm"].isin(config.intermediate.warm_months), "import_kwh"].sum()
     )
     cool = float(
-        monthly.loc[
-            monthly["mm"].isin(config.intermediate.cool_months), "import_kwh"
-        ].sum()
+        monthly.loc[monthly["mm"].isin(config.intermediate.cool_months), "import_kwh"].sum()
     )
     if warm == 0 and cool == 0:
         return None
@@ -159,9 +155,7 @@ def peak_demand_characteristics(
             level="intermediate",
             category="tariff",
             title="Stable peak demand profile",
-            message=(
-                "Peak demand within the window appears relatively stable rather than spiky."
-            ),
+            message=("Peak demand within the window appears relatively stable rather than spiky."),
             severity="info",  # type: ignore[arg-type]
             metrics={
                 "mean_peak_kw": mean_kw,

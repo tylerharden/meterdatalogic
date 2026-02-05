@@ -22,9 +22,7 @@ def ensure_tz_aware_index(df: pd.DataFrame, tz: str) -> pd.DataFrame:
     return df
 
 
-def infer_cadence_minutes(
-    idx: pd.DatetimeIndex, default: int = canon.DEFAULT_CADENCE_MIN
-) -> int:
+def infer_cadence_minutes(idx: pd.DatetimeIndex, default: int = canon.DEFAULT_CADENCE_MIN) -> int:
     """
     Infer cadence in minutes from a DatetimeIndex, ignoring duplicate timestamps.
     """
@@ -61,13 +59,13 @@ def safe_localize_series(ts: pd.Series, tz: str) -> pd.Series:
 
 def parse_time_str(tstr: str) -> _time:
     """Parse HH:MM string to datetime.time, handling '24:00' → '00:00' rollover.
-    
+
     Args:
         tstr: Time string in HH:MM format (e.g., '16:00', '24:00')
-        
+
     Returns:
         datetime.time object
-        
+
     Example:
         >>> parse_time_str('16:00')
         datetime.time(16, 0)
@@ -113,7 +111,7 @@ def day_mask(
 
     Returns:
         Boolean numpy array aligned with idx
-    
+
     Example:
         >>> idx = pd.date_range('2025-01-01', periods=7, freq='D', tz='UTC')
         >>> mask = day_mask(idx, 'MF')
@@ -149,18 +147,16 @@ def month_label(ts: pd.Series | pd.DatetimeIndex, tz: str | None = None) -> pd.S
         return s.dt.strftime("%Y-%m")
 
 
-def format_period_label(
-    ts: pd.Series | pd.DatetimeIndex, freq: str
-) -> pd.Series | np.ndarray:
+def format_period_label(ts: pd.Series | pd.DatetimeIndex, freq: str) -> pd.Series | np.ndarray:
     """Format timestamps as period labels (day or month) based on frequency.
-    
+
     Args:
         ts: DateTime Series or Index to format
         freq: '1D' for daily (YYYY-MM-DD) or '1MS'/'MS' for monthly (YYYY-MM)
-        
+
     Returns:
         Series or array of formatted strings
-        
+
     Example:
         >>> format_period_label(pd.date_range('2025-01', periods=3, freq='D'), '1D')
         ['2025-01-01', '2025-01-02', '2025-01-03']
@@ -176,13 +172,13 @@ def format_period_label(
 
 def compute_flow_totals(df: pd.DataFrame) -> dict[str, float]:
     """Compute total kWh by flow from canonical DataFrame.
-    
+
     Args:
         df: Canonical DataFrame with 'flow' and 'kwh' columns
-        
+
     Returns:
         Dictionary mapping flow names to total kWh
-        
+
     Example:
         >>> totals = compute_flow_totals(df)
         >>> totals['grid_import']
@@ -195,13 +191,13 @@ def compute_flow_totals(df: pd.DataFrame) -> dict[str, float]:
 
 def total_import_export(flow_totals: dict[str, float]) -> tuple[float, float]:
     """Extract import and export totals from flow totals dictionary.
-    
+
     Args:
         flow_totals: Dictionary of flow names to kWh totals
-        
+
     Returns:
         Tuple of (total_import_kwh, total_export_kwh)
-        
+
     Example:
         >>> totals = {'grid_import': 1000, 'grid_export_solar': 200}
         >>> import_kwh, export_kwh = total_import_export(totals)
@@ -210,22 +206,22 @@ def total_import_export(flow_totals: dict[str, float]) -> tuple[float, float]:
     """
     import_flows = [k for k in flow_totals.keys() if "import" in k]
     export_flows = [k for k in flow_totals.keys() if "export" in k]
-    
+
     total_import = float(sum(flow_totals.get(k, 0.0) for k in import_flows))
     total_export = float(sum(flow_totals.get(k, 0.0) for k in export_flows))
-    
+
     return total_import, total_export
 
 
 def daily_total_from_profile(profile: pd.DataFrame) -> float:
     """Compute total daily kWh from an average-day profile with import_total.
-    
+
     Args:
         profile: DataFrame with 'import_total' column (from transform.profile)
-        
+
     Returns:
         Total daily kWh as float
-        
+
     Example:
         >>> prof = transform.profile(df, include_import_total=True)
         >>> daily_kwh = daily_total_from_profile(prof)

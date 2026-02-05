@@ -46,9 +46,7 @@ def _assign_time_bands(idx: pd.DatetimeIndex, bands: Iterable[dict]) -> pd.Serie
     return assigned.fillna("unassigned")
 
 
-def _compute_power_from_energy(
-    df: pd.DataFrame, *, energy_col: str = "kwh"
-) -> pd.Series:
+def _compute_power_from_energy(df: pd.DataFrame, *, energy_col: str = "kwh") -> pd.Series:
     """Convert per-interval energy (kWh) to power (kW) using cadence_min."""
     factor = 60.0 / df["cadence_min"].astype(float)
     return (df[energy_col].astype(float) * factor).rename("kW")
@@ -146,9 +144,7 @@ def aggregate(
             )
             out = out.reset_index().rename(columns={"_val": base_name})
         else:
-            out = pd.DataFrame(
-                {base_name: [_apply_agg(base, stat if metric == "kW" else agg)]}
-            )
+            out = pd.DataFrame({base_name: [_apply_agg(base, stat if metric == "kW" else agg)]})
         return out
 
     # With resampling
@@ -171,11 +167,7 @@ def aggregate(
         # no group columns, pure resample
         res = base.resample(freq, label=label, closed=closed)
         if metric == "kW":
-            series = (
-                res.max()
-                if stat == "max"
-                else (res.mean() if stat == "mean" else res.sum())
-            )
+            series = res.max() if stat == "max" else (res.mean() if stat == "mean" else res.sum())
         else:
             series = res.agg(agg)
         out = pd.DataFrame({base_name: series})
@@ -270,19 +262,15 @@ def window_stats_from_profile(
         end_m = hhmm_to_minutes(str(w["end"]))
         if end_m < start_m:  # wrap
             mask = profile_with_import["slot"].apply(
-                lambda s: (hhmm_to_minutes(s) >= start_m)
-                or (hhmm_to_minutes(s) < end_m)
+                lambda s: (hhmm_to_minutes(s) >= start_m) or (hhmm_to_minutes(s) < end_m)
             )
         else:
             mask = profile_with_import["slot"].apply(
-                lambda s: (hhmm_to_minutes(s) >= start_m)
-                and (hhmm_to_minutes(s) < end_m)
+                lambda s: (hhmm_to_minutes(s) >= start_m) and (hhmm_to_minutes(s) < end_m)
             )
         window_kwh = float(profile_with_import.loc[mask, "import_total"].sum())
         window_hours = (
-            (end_m - start_m) / 60.0
-            if end_m >= start_m
-            else ((24 * 60 - start_m) + end_m) / 60.0
+            (end_m - start_m) / 60.0 if end_m >= start_m else ((24 * 60 - start_m) + end_m) / 60.0
         )
         avg_kw = (window_kwh / window_hours) if window_hours > 0 else 0.0
         share = (window_kwh / total * 100.0) if total > 0 else 0.0
@@ -348,11 +336,7 @@ def profile(
         if import_flows:
             cols = [c for c in flow_cols if c in set(import_flows)]
         else:
-            cols = [
-                c
-                for c in flow_cols
-                if ("import" in str(c)) or str(c).startswith("grid_")
-            ]
+            cols = [c for c in flow_cols if ("import" in str(c)) or str(c).startswith("grid_")]
             if not cols:
                 cols = flow_cols
         prof["import_total"] = prof[cols].select_dtypes(float).sum(axis=1)
@@ -382,9 +366,7 @@ def period_breakdown(
     flow_cols = [c for c in totals.columns if c != labels]
     totals["total_kwh"] = totals[flow_cols].select_dtypes(float).sum(axis=1)
 
-    peaks = aggregate(
-        df, freq=freq, value_col="kwh", agg="max", flows=flows
-    ).reset_index()
+    peaks = aggregate(df, freq=freq, value_col="kwh", agg="max", flows=flows).reset_index()
     peaks = peaks.rename(columns={"t_start": labels, "kwh": "peak_interval_kwh"})
     peaks[labels] = utils.format_period_label(peaks[labels], freq)
 
@@ -425,10 +407,6 @@ def top_n_from_profile(
     )
     labels = list(grouped.head(n).index)
     value_total = float(grouped.head(n).sum())
-    denom = (
-        float(total_value)
-        if total_value is not None
-        else float(profile_df[value_col].sum())
-    )
+    denom = float(total_value) if total_value is not None else float(profile_df[value_col].sum())
     share = (value_total / denom * 100.0) if denom > 0 else 0.0
     return {"labels": labels, "value_total": value_total, "share_pct": float(share)}

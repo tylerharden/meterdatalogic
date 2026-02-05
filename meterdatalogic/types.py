@@ -31,7 +31,7 @@ class CanonFrame(pd.DataFrame):
     def channel(self) -> pd.Series:
         return self["channel"]
 
-    @property # either 'grid_import', 'controlled_load_import', 'grid_export_solar'
+    @property  # either 'grid_import', 'controlled_load_import', 'grid_export_solar'
     def flow(self) -> pd.Series:
         return self["flow"]
 

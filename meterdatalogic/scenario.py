@@ -240,11 +240,7 @@ def run(
     imp_mask = s_import_after.to_numpy() > 0
     exp_mask = s_export_after.to_numpy() > 0
     nmi_val = df["nmi"].iloc[0] if "nmi" in df.columns and len(df) else None
-    cad_min = (
-        int(df["cadence_min"].iloc[0])
-        if "cadence_min" in df.columns and len(df)
-        else None
-    )
+    cad_min = int(df["cadence_min"].iloc[0]) if "cadence_min" in df.columns and len(df) else None
 
     parts = []
     if imp_mask.any():
@@ -280,9 +276,7 @@ def run(
             df_after.index = pd.DatetimeIndex(df_after.index)
     else:
         df_after = pd.DataFrame(columns=canon.REQUIRED_COLS).set_index(
-            pd.DatetimeIndex(
-                [], tz=getattr(df.index, "tz", None), name=canon.INDEX_NAME
-            )
+            pd.DatetimeIndex([], tz=getattr(df.index, "tz", None), name=canon.INDEX_NAME)
         )
     validate.assert_canon(df_after)
 
@@ -295,15 +289,13 @@ def run(
     if plan is not None:
         bill_b = pricing.compute_billables(df, plan, mode="monthly")
         cost_before = pricing.estimate_costs(bill_b, plan)
-        bill_a = pricing.compute_billables(
-            cast(CanonFrame, df_after), plan, mode="monthly"
-        )
+        bill_a = pricing.compute_billables(cast(CanonFrame, df_after), plan, mode="monthly")
         cost_after = pricing.estimate_costs(bill_a, plan)
 
     # Deltas & explainables
     flow_before = utils.compute_flow_totals(df)
     flow_after = utils.compute_flow_totals(df_after) if len(df_after) else {}
-    
+
     import_b = flow_before.get("grid_import", 0.0)
     export_b = flow_before.get("grid_export_solar", 0.0)
     import_a = flow_after.get("grid_import", 0.0)

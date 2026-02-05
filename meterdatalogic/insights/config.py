@@ -7,10 +7,11 @@ from typing import List
 @dataclass
 class BasicInsightsConfig:
     """Configuration for basic-level insights.
-    
+
     These thresholds are based on typical Australian residential usage patterns
     and industry benchmarks for customer engagement.
     """
+
     # Usage vs benchmark
     benchmark_kwh_per_year: float = 6000.0  # Typical 2-3 person household in QLD/NSW
     high_usage_pct_threshold: float = 20.0  # % above benchmark to flag
@@ -29,10 +30,11 @@ class BasicInsightsConfig:
 @dataclass
 class IntermediateInsightsConfig:
     """Configuration for intermediate-level insights.
-    
+
     These values are tuned for actionable recommendations based on
     observed usage patterns and tariff structures in Australian retail markets.
     """
+
     # Seasonal variation
     warm_months: List[str] = field(
         default_factory=lambda: ["12", "01", "02"]  # Dec–Feb (summer in AU)
@@ -57,10 +59,11 @@ class IntermediateInsightsConfig:
 @dataclass
 class AdvancedInsightsConfig:
     """Configuration for advanced-level insights.
-    
+
     These parameters support detection of specific behaviors (EV charging,
     baseload changes) and scenario impact assessment.
     """
+
     # EV impact window for attribution
     ev_peak_window_start: str = "16:00"  # Typical home arrival time
     ev_peak_window_end: str = "21:00"
@@ -81,9 +84,7 @@ class AdvancedInsightsConfig:
 @dataclass
 class InsightConfig:
     basic: BasicInsightsConfig = field(default_factory=BasicInsightsConfig)
-    intermediate: IntermediateInsightsConfig = field(
-        default_factory=IntermediateInsightsConfig
-    )
+    intermediate: IntermediateInsightsConfig = field(default_factory=IntermediateInsightsConfig)
     advanced: AdvancedInsightsConfig = field(default_factory=AdvancedInsightsConfig)
 
 

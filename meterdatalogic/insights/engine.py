@@ -7,8 +7,6 @@ from .types import Insight, InsightContext, InsightEvaluator
 from .config import InsightConfig, default_config
 from ..types import CanonFrame
 
-logger = logging.getLogger(__name__)
-
 # Import evaluator groups
 from .evaluators_basic import (
     usage_vs_benchmark,
@@ -26,6 +24,8 @@ from .evaluators_advanced import (
     load_shifting_opportunities,
     step_change_baseload,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _flatten(results: Iterable[Optional[Insight] | List[Insight]]) -> List[Insight]:
@@ -77,9 +77,6 @@ def generate_insights(
         except Exception as e:
             # Be defensive: one failing evaluator shouldn't block others.
             ev_name = getattr(ev, "__name__", ev.__class__.__name__)
-            logger.debug(
-                f"Insight evaluator {ev_name} failed: {e}",
-                exc_info=True
-            )
+            logger.debug(f"Insight evaluator {ev_name} failed: {e}", exc_info=True)
             continue
     return _flatten(results)

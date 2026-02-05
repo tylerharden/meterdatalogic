@@ -1,6 +1,6 @@
 from __future__ import annotations
 import pandas as pd
-from typing import IO, Optional, cast, TYPE_CHECKING, Any
+from typing import IO, Optional, cast, TYPE_CHECKING
 
 from . import canon, utils, validate
 from .types import CanonFrame
@@ -17,14 +17,14 @@ else:
 def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("Index must be a DatetimeIndex.")
-    
+
     if df.empty:
         # Return empty dataframe with cadence_min column
         df["cadence_min"] = pd.Series(dtype=int)
         return df
 
     gcols = ["nmi", "channel"]
-    
+
     # Verify required columns exist
     missing_cols = [col for col in gcols if col not in df.columns]
     if missing_cols:
@@ -40,12 +40,10 @@ def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
     gb = df.sort_index().groupby(gcols, observed=True)
     # Future-proof against pandas deprecation of applying on group columns
     try:
-        cad_series = gb.apply(
-            _infer_group_cadence, include_groups=False
-        )  # pandas >=2.2
+        cad_series = gb.apply(_infer_group_cadence, include_groups=False)  # pandas >=2.2
     except TypeError:
         cad_series = gb.apply(_infer_group_cadence)
-    
+
     # Ensure the result is a Series with proper index
     # Handle empty results or unexpected shapes
     if isinstance(cad_series, pd.DataFrame):
@@ -62,7 +60,7 @@ def _attach_cadence_per_group(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             # Last resort: create empty Series
             cad_series = pd.Series(dtype=int, name="cadence_min")
-    
+
     cad_per_group = cad_series.to_frame("cadence_min").reset_index()
 
     out = (
@@ -169,9 +167,7 @@ def from_nem12(
       - columns: nmi, channel, flow, kwh (positive), cadence_min
     """
     if NEMFile is None:
-        raise RuntimeError(
-            "nemreader is not installed. Install nemreader to use from_nem12."
-        )
+        raise RuntimeError("nemreader is not installed. Install nemreader to use from_nem12.")
 
     nf = NEMFile(file_like)
     raw = (
@@ -190,9 +186,7 @@ def from_nem12(
     # So: make kwh positive; flow from suffix; export is represented by flow name.
     channel_map = channel_map or canon.CHANNEL_MAP
     df["kwh"] = df["kwh"].astype(float).abs()
-    df["flow"] = (
-        df["channel"].astype(str).map(channel_map).fillna(df["channel"].astype(str))
-    )
+    df["flow"] = df["channel"].astype(str).map(channel_map).fillna(df["channel"].astype(str))
 
     # Minimum required columns
     if "nmi" not in df.columns:

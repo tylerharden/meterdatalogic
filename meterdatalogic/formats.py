@@ -71,12 +71,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
             flows_dict: dict[str, list[float]] = {}
 
             for flow_name, fdf in day_df.groupby("flow"):
-                s = (
-                    fdf["kwh"]
-                    .reindex(full_index, method=None)
-                    .fillna(0.0)
-                    .astype(float)
-                )
+                s = fdf["kwh"].reindex(full_index, method=None).fillna(0.0).astype(float)
                 flows_dict[str(flow_name)] = s.to_list()
 
             logical_day: LogicalDay = {
