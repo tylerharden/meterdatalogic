@@ -1,7 +1,6 @@
 # meterdatalogic
 
 meterdatalogic is a lightweight Python package that provides data transformation, validation, and analytics logic for customer interval meter data.  
-It’s designed to serve as the core analytical engine for the Meter Data Tool (MDT) — usable from web apps, notebooks, or pipelines.
 
 - Canonical Data Shape — normalise datasets to a consistent schema for reliable analytics.
 - Small, Composable Modules — ingest, validate, transform, summary, pricing, scenario.
@@ -12,51 +11,10 @@ It’s designed to serve as the core analytical engine for the Meter Data Tool (
 
 ---
 
-## Install
-
-### Using uv (recommended - much faster!)
-
-```bash
-# Install uv if you haven't already
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies (uv automatically creates and manages .venv)
-cd meterdatalogic
-uv sync --all-extras
-
-# Run commands without activating the venv!
-uv run pytest
-uv run ruff check .
-
-# Or use make targets
-make install  # = uv sync --all-extras
-make test     # = uv run pytest -q
-make lint     # = uv run ruff check .
-```
-
-### Using pip
-
-```bash
-# From this repo (editable install for development)
-pip install -e ./meterdatalogic[dev]
-
-# Or bring your own env with deps
-pip install pandas numpy nemreader
-```
-
-> **Why uv?** 
-> - 10-100x faster than pip (installation drops from ~60s to ~5s)
-> - Automatically manages virtual environments (no activation needed!)
-> - Better dependency resolution
-> - Just use `uv run <command>` and it handles everything
-> - See [uv documentation](https://docs.astral.sh/uv/) for more.
-
 ### Requirements
 
 - **Python**: 3.10+
 - **pandas**: >=2.0.0 (tested with 2.3.3)
-  - pandas >=2.2 recommended for `include_groups` parameter support
-  - Earlier versions will fall back to legacy behavior with a warning
 - **numpy**: >=1.24.0
 - **nemreader**: >=0.9.2 (optional, only needed for NEM12 file parsing)
 
@@ -81,11 +39,10 @@ Key principles:
 
 Comprehensive documentation is available in the [docs/](docs/) folder:
 
-- **[Getting Started](docs/guides/setup_environment.md)** - Installation and setup
-- **[Examples & Use Cases](docs/guides/examples.md)** - Practical recipes
-- **[API Reference](docs/reference/api-reference.md)** - Complete API documentation
-- **[Feature Guides](docs/features/)** - Deep dives into insights, scenarios, validation
-- **[Contributing](docs/guides/contributing.md)** - Developer guide
+- **[Release Workflow](docs/release-workflow.md)** - Release workflow guide
+- **[Data Structure Format](docs/data-structure-format.md)** - Data structure format
+- **[Examples & Use Cases](docs/examples.md)** - Practical recipes
+- **[API Reference](docs/api-reference.md)** - Complete API documentation
 
 ---
 
@@ -244,18 +201,6 @@ result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
 
 ---
 
-## Performance Notes
-
-- **Typical processing**: 1M intervals (1 year of 30-min data) in ~2-3 seconds on modern hardware
-- **Memory usage**: ~150-200 bytes per interval row (5-interval DataFrame overhead)
-- **Recommended limits**: Up to 10M intervals (10 years of data) works well in-memory
-- **Optimization tips**:
-  - Filter to single NMI before processing when working with multi-site data
-  - Use `freq` parameter in `aggregate()` to downsample before heavy computation
-  - Profile-based summaries (`profile()`, `top_n_from_profile()`) are pre-aggregated for speed
-
----
-
 ## Testing
 
 ```bash
@@ -286,83 +231,4 @@ uv run ruff format .
 
 # Run pre-commit hooks
 uv run pre-commit run --all-files
-```
-
-See [Contributing Guide](docs/guides/contributing.md) for detailed development workflow.
-
----
-
-## Releasing
-
-Releases are automated via GitHub Actions with PyPI trusted publishing.
-
-### Quick Release
-
-```bash
-# 1. Bump version
-make bump-patch   # 0.1.4 → 0.1.5
-make bump-minor   # 0.1.4 → 0.2.0
-make bump-major   # 0.1.4 → 1.0.0
-
-# 2. Push to GitHub
-git push && git push --tags
-```
-
-### What Happens Automatically
-
-When you push a tag (e.g., `v0.1.5`):
-
-1. ✅ GitHub Actions builds the package (wheel + sdist)
-2. ✅ **Publishes to PyPI** using trusted publishing (no token needed!)
-3. ✅ Creates GitHub Release with artifacts
-4. ✅ Detects pre-releases (alpha, beta, rc) automatically
-
-### Pre-releases
-
-Support for alpha, beta, and release candidates:
-
-```bash
-# Update version in pyproject.toml
-version = "0.1.5-alpha"
-
-# Tag and push
-git tag v0.1.5-alpha
-git push --tags
-```
-
-Pre-releases are marked as such on both GitHub and PyPI. Users can install with:
-```bash
-pip install --pre meterdatalogic
-```
-
-### PyPI Setup (One-time)
-
-For automated publishing, configure PyPI trusted publishing:
-
-1. Go to https://pypi.org/manage/account/publishing/
-2. Add a new publisher:
-   - **PyPI project name**: `meterdatalogic`
-   - **Owner**: `tylerharden`
-   - **Repository**: `meterdatalogic`
-   - **Workflow**: `release.yml`
-   - **Environment**: (leave blank)
-
-No API tokens needed! See [Release Workflow docs](docs/releasing-workflow.md) for details.
-
----
-
-## Installation from PyPI
-
-Once published:
-
-```bash
-# Install latest stable version
-pip install meterdatalogic
-
-# Install with optional dependencies
-pip install meterdatalogic[dev]  # Development tools
-pip install meterdatalogic[nem12]  # NEM12 support
-
-# Install pre-release versions
-pip install --pre meterdatalogic
 ```
