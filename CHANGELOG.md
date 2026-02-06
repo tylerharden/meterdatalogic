@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 -
 
+## [0.1.7] - 2026-02-06
+
+### Added
+- `compute_billables()` now accepts optional parameters `include_controlled_load` and `include_total_import`
+- When `include_controlled_load=True`, adds `controlled_load_kwh` column with controlled load import totals
+- When `include_total_import=True`, adds `total_import_kwh` column with all import flows summed
+- Both parameters work in both `monthly` and `cycles` modes
+- Added comprehensive test coverage for new optional flow parameters
+- Change from dataclasses to pydantic
+
 ## [0.1.6] - 2026-02-05
 
 ### Fixed

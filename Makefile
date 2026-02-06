@@ -49,6 +49,47 @@ publish: clean build
 	@echo "Publishing to PyPI..."
 	uv run twine upload dist/*
 
+# Install this package into parent FastAPI project (editable mode)
+install-parent:
+	@echo "Installing meterdatalogic into parent project in editable mode..."
+	cd .. && uv pip install -e ./meterdatalogic
+
+# Build and install wheel into parent project (non-editable)
+install-parent-wheel: build
+	@echo "Installing meterdatalogic wheel into parent project..."
+	cd .. && uv pip install --force-reinstall ./meterdatalogic/dist/*.whl
+
+# Quick test: install locally and run parent project tests
+quick-test: install-parent
+	@echo "Running parent project tests..."
+	cd .. && uv run pytest tests/test_analyzer_integration.py -v
+
+# Help command
+help:
+	@echo "Meterdatalogic Makefile Commands:"
+	@echo ""
+	@echo "Development:"
+	@echo "  make install              - Install dependencies with uv"
+	@echo "  make test                 - Run unit tests"
+	@echo "  make lint                 - Check code with ruff"
+	@echo "  make lint-fix             - Auto-fix linting issues"
+	@echo ""
+	@echo "Local Installation (for FastAPI project):"
+	@echo "  make install-parent       - Install in editable mode to parent project (recommended)"
+	@echo "  make install-parent-wheel - Build wheel and install to parent project"
+	@echo "  make quick-test           - Install locally and run parent tests"
+	@echo ""
+	@echo "Building & Publishing:"
+	@echo "  make build                - Build wheel and sdist"
+	@echo "  make publish              - Build and publish to PyPI"
+	@echo "  make bump-patch/minor/major - Bump version"
+	@echo ""
+	@echo "Cleanup:"
+	@echo "  make clean                - Remove build artifacts"
+
+.PHONY: install test lint lint-fix build clean publish install-parent install-parent-wheel quick-test help
+
+
 # Create GitHub release (requires gh CLI)
 release:
 	@echo "Creating GitHub release..."

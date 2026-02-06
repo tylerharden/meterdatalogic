@@ -218,6 +218,60 @@ uv run pytest tests/test_transform.py
 
 ---
 
+## Local Development & Testing
+
+When working on meterdatalogic and testing changes in the parent FastAPI project, you can install the local version:
+
+### Option 1: Editable Install (Recommended)
+Install in editable mode so changes are reflected immediately without reinstalling:
+
+```bash
+# Using make (from meterdatalogic directory)
+make install-parent
+
+# Or manually
+cd /path/to/parent-project
+uv pip install -e ./meterdatalogic
+```
+
+### Option 2: Wheel Install
+Build and install a wheel (use when you want to test the built artifact):
+
+```bash
+# Using make
+make install-parent-wheel
+
+# Or using the script
+./scripts/install_local.sh --wheel
+```
+
+### Quick Testing Workflow
+
+```bash
+# From meterdatalogic directory:
+
+# 1. Make your changes to meterdatalogic code
+# 2. Install locally (if not already in editable mode)
+make install-parent
+
+# 3. Run parent project tests
+make quick-test
+
+# Or run all parent tests manually
+cd .. && uv run pytest tests/ -v
+```
+
+### Available Make Commands
+
+```bash
+make help                 # Show all available commands
+make install             # Install dependencies
+make test                # Run meterdatalogic tests
+make install-parent      # Install into parent project (editable)
+make install-parent-wheel # Build and install wheel to parent
+make quick-test          # Install locally and run parent tests
+```
+
 ## Development
 
 ```bash
