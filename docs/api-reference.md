@@ -239,26 +239,54 @@ Tariff calculations and billing.
 
 **Functions:**
 
-#### `compute_billables(df, plan, mode="monthly", tz=None)`
+#### `compute_billables(df, plan, mode="monthly", cycles=None, include_controlled_load=False, include_total_import=False)`
 
 Calculate billable quantities for energy charges.
 
 **Parameters:**
 - `df` (CanonFrame): Input meter data
-- `plan` (dict): Tariff plan configuration
-- `mode` (str): "monthly" or "cycles" (custom billing periods)
-- `tz` (str, optional): Override timezone
+- `plan` (Plan): Tariff plan with TOU bands, demand window, and rates
+- `mode` (str): "monthly" (calendar months) or "cycles" (custom billing periods)
+- `cycles` (list of tuples, optional): Required when mode="cycles". List of (start_date, end_date) billing cycle tuples
+- `include_controlled_load` (bool): If True, adds 'controlled_load_kwh' column with controlled load import totals (default: False)
+- `include_total_import` (bool): If True, adds 'total_import_kwh' column with all import flows summed (default: False)
 
 **Returns:** DataFrame with billable quantities per period
 
+**Columns returned:**
+- mode="monthly": `['month', <TOU band names>, 'export_kwh', 'demand_kw']`
+- mode="cycles": `['cycle', <TOU band names>, 'export_kwh', 'demand_kw', 'days_in_cycle']`
+- Optional: `'controlled_load_kwh'`, `'total_import_kwh'` (if requested)
+
+**Example:**
+```python
+import meterdatalogic as ml
+
+# Basic usage
+billables = ml.pricing.compute_billables(df, plan, mode="monthly")
+
+# Include optional flows
+billables_extended = ml.pricing.compute_billables(
+    df, 
+    plan, 
+    mode="monthly",
+    include_controlled_load=True,
+    include_total_import=True
+)
+# Returns: month, TOU bands, export_kwh, demand_kw, controlled_load_kwh, total_import_kwh
+```
+
 **Plan Structure:**
 ```python
-plan = {
-    "demand_window": "30D",  # Rolling demand window
-    "demand_method": "rolling_avg",  # or "peak"
-    "billing_cycle": "monthly",  # or list of cycle dates
-    "tou_bands": [...],  # TOU band definitions
-}
+plan = ml.types.Plan(
+    usage_bands=[
+        ml.types.ToUBand("peak", "16:00", "21:00", 45.0),
+        ml.types.ToUBand("offpeak", "21:00", "16:00", 22.0),
+    ],
+    demand=ml.types.DemandCharge("16:00", "21:00", "MF", 12.0),
+    fixed_c_per_day=95.0,
+    feed_in_c_per_kwh=6.0,
+)
 ```
 
 #### `estimate_costs(billables, tariff)`

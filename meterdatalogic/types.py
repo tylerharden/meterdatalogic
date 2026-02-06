@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd
+from pydantic import BaseModel
 
 Flow = Literal["grid_import", "controlled_load_import", "grid_export_solar"]
 
@@ -143,24 +144,24 @@ class SummaryPayload(TypedDict, total=False):
 
 
 ## TOU Pricing Models
-@dataclass
-class ToUBand:
+class ToUBand(BaseModel):
+    """Time-of-Use tariff band."""
     name: str
     start: str  # "HH:MM"
     end: str  # "HH:MM"
     rate_c_per_kwh: float
 
 
-@dataclass
-class DemandCharge:
+class DemandCharge(BaseModel):
+    """Demand charge configuration."""
     window_start: str  # "HH:MM"
     window_end: str  # "HH:MM"
     days: Literal["MF", "MS"]
     rate_per_kw_per_month: float
 
 
-@dataclass
-class Plan:
+class Plan(BaseModel):
+    """Complete electricity tariff plan."""
     usage_bands: list[ToUBand]
     feed_in_c_per_kwh: float = 0.0
     demand: Optional[DemandCharge] = None
@@ -185,8 +186,8 @@ class ScenarioExplain(TypedDict, total=False):
     pv_self_consumption_pct: Optional[float]
 
 
-@dataclass
-class EVConfig:
+class EVConfig(BaseModel):
+    """Electric Vehicle charging configuration."""
     daily_kwh: float = 7.0  # energy to add per day for charging
     max_kw: float = 7.0  # charger/inlet limit
     window_start: str = "18:00"
@@ -195,16 +196,16 @@ class EVConfig:
     strategy: Literal["immediate", "scheduled"] = "immediate"  # solar_follow later
 
 
-@dataclass
-class PVConfig:
+class PVConfig(BaseModel):
+    """Solar PV system configuration."""
     system_kwp: float  # DC nameplate
     inverter_kw: float  # AC limit
     loss_fraction: float = 0.15  # wiring/soiling/etc.
     seasonal_scale: Optional[dict[str, float]] = None  # e.g. {"01":1.05,"06":0.9}
 
 
-@dataclass
-class BatteryConfig:
+class BatteryConfig(BaseModel):
+    """Battery storage system configuration."""
     capacity_kwh: float  # usable capacity
     max_kw: float  # charge/discharge AC limit
     round_trip_eff: float = 0.90  # overall, applied as sqrt on charge/discharge

@@ -68,10 +68,14 @@ def _cycle_billables(
     df: pd.DataFrame,
     plan: Plan,
     cycles: Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]],
+    *,
+    include_controlled_load: bool = False,
+    include_total_import: bool = False,
 ) -> pd.DataFrame:
     """
     One row per cycle:
       ['cycle', <band columns>, 'export_kwh', 'demand_kw', 'days_in_cycle']
+      Optionally: 'controlled_load_kwh', 'total_import_kwh'
     """
     # attach labels
     dfx = df.copy()
@@ -130,8 +134,33 @@ def _cycle_billables(
     else:
         demand = pd.DataFrame({"cycle": tou["cycle"].unique(), "demand_kw": 0.0})
 
+    # ---- CONTROLLED LOAD (optional) ----
+    if include_controlled_load:
+        controlled_load = (
+            dfx[dfx["flow"] == "controlled_load_import"]
+            .groupby("cycle", as_index=False)
+            .agg(controlled_load_kwh=("kwh", "sum"))
+        )
+    else:
+        controlled_load = None
+
+    # ---- TOTAL IMPORT (optional) ----
+    if include_total_import:
+        total_import = (
+            dfx[dfx["flow"].str.contains("import")]
+            .groupby("cycle", as_index=False)
+            .agg(total_import_kwh=("kwh", "sum"))
+        )
+    else:
+        total_import = None
+
     # ---- MERGE ----
     out = tou.merge(export, on="cycle", how="left").merge(demand, on="cycle", how="left")
+    if controlled_load is not None:
+        out = out.merge(controlled_load, on="cycle", how="left")
+    if total_import is not None:
+        out = out.merge(total_import, on="cycle", how="left")
+
     numeric_cols = out.select_dtypes(include="number").columns
     out[numeric_cols] = out[numeric_cols].fillna(0.0)
 
@@ -152,12 +181,33 @@ def compute_billables(
     *,
     mode: Literal["monthly", "cycles"] = "monthly",
     cycles: Optional[Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]]] = None,
+    include_controlled_load: bool = False,
+    include_total_import: bool = False,
 ) -> pd.DataFrame:
     """
     Compute billable quantities for a given plan.
 
-    - mode="monthly": returns columns ['month', <band cols>, 'export_kwh', 'demand_kw']
-    - mode="cycles": returns columns ['cycle', <band cols>, 'export_kwh', 'demand_kw', 'days_in_cycle']
+    Parameters:
+    -----------
+    df : CanonFrame
+        Canonical meter data DataFrame
+    plan : Plan
+        Tariff plan with TOU bands, demand window, and rates
+    mode : Literal["monthly", "cycles"]
+        Aggregation period - "monthly" for calendar months, "cycles" for custom billing periods
+    cycles : Optional[Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]]]
+        Required when mode="cycles". List of (start_date, end_date) tuples for billing cycles
+    include_controlled_load : bool
+        If True, adds 'controlled_load_kwh' column with controlled load import totals
+    include_total_import : bool
+        If True, adds 'total_import_kwh' column with all import flows totaled
+
+    Returns:
+    --------
+    pd.DataFrame
+        - mode="monthly": columns ['month', <band cols>, 'export_kwh', 'demand_kw']
+        - mode="cycles": columns ['cycle', <band cols>, 'export_kwh', 'demand_kw', 'days_in_cycle']
+        - Optional: 'controlled_load_kwh', 'total_import_kwh' (if requested)
     """
     if mode == "monthly":
         tou = transform.tou_bins(
@@ -222,11 +272,44 @@ def compute_billables(
             demand = base.copy()
             demand["demand_kw"] = 0.0
 
+        # ---- CONTROLLED LOAD (optional) ----
+        if include_controlled_load:
+            controlled_load = (
+                df.loc[df["flow"] == "controlled_load_import", ["kwh"]]
+                .resample("1MS")
+                .sum()
+                .rename(columns={"kwh": "controlled_load_kwh"})
+                .reset_index()
+            )
+            controlled_load["month"] = utils.month_label(controlled_load["t_start"])  # type: ignore[arg-type]
+            controlled_load = controlled_load[["month", "controlled_load_kwh"]]
+        else:
+            controlled_load = None
+
+        # ---- TOTAL IMPORT (optional) ----
+        if include_total_import:
+            total_import = (
+                df.loc[df["flow"].str.contains("import"), ["kwh"]]
+                .resample("1MS")
+                .sum()
+                .rename(columns={"kwh": "total_import_kwh"})
+                .reset_index()
+            )
+            total_import["month"] = utils.month_label(total_import["t_start"])  # type: ignore[arg-type]
+            total_import = total_import[["month", "total_import_kwh"]]
+        else:
+            total_import = None
+
         out = (
             base.merge(tou, on="month", how="left")
             .merge(export, on="month", how="left")
             .merge(demand, on="month", how="left")
         )
+        if controlled_load is not None:
+            out = out.merge(controlled_load, on="month", how="left")
+        if total_import is not None:
+            out = out.merge(total_import, on="month", how="left")
+
         numeric_cols = out.select_dtypes(include="number").columns
         out[numeric_cols] = out[numeric_cols].fillna(0.0)
         return out
@@ -234,7 +317,13 @@ def compute_billables(
     # cycles mode
     if not cycles:
         raise ValueError("cycles must be provided when mode='cycles'")
-    return _cycle_billables(df, plan, cycles)
+    return _cycle_billables(
+        df,
+        plan,
+        cycles,
+        include_controlled_load=include_controlled_load,
+        include_total_import=include_total_import,
+    )
 
 
 def estimate_costs(
