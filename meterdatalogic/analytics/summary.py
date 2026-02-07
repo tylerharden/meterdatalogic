@@ -1,6 +1,6 @@
 from __future__ import annotations
 import pandas as pd
-from typing import cast
+from typing import cast, Literal
 
 from ..core import canon, transform, utils
 from ..core.types import CanonFrame
@@ -8,7 +8,7 @@ from .types import SummaryPayload
 from . import insights as insights_mod
 
 
-def summarise(df: CanonFrame) -> SummaryPayload:
+def summarise(df: CanonFrame, hemisphere: Literal["northern", "southern"] = "southern") -> SummaryPayload:
     # Configure windows here for easy adjustment
     WINDOWS = [
         {"key": "overnight", "start": "00:00", "end": "05:00"},
@@ -88,6 +88,29 @@ def summarise(df: CanonFrame) -> SummaryPayload:
         monthly_bd["average"].to_dict(orient="records") if not monthly_bd["average"].empty else []
     )  # type: ignore[assignment]
 
+    # Seasonal breakdown using aggregate directly with monthly resampling
+    seasons_df = transform.aggregate(
+        df, 
+        freq="1MS", 
+        groupby=["season", "flow"], 
+        hemisphere=hemisphere, 
+        pivot=False,
+        value_col="kwh",
+        agg="sum"
+    )
+    if not seasons_df.empty:
+        # Pivot flow columns for consistent structure with monthly/daily breakdowns
+        seasons_df = seasons_df.pivot_table(
+            index=["season", "year"],
+            columns="flow",
+            values="kwh",
+            aggfunc="sum"
+        ).reset_index()
+    
+    seasons_records: list[dict[str, float | str]] = (
+        seasons_df.to_dict(orient="records") if not seasons_df.empty else []
+    )  # type: ignore[assignment]
+
     # Ensure explicit str types for start/end
     start_str: str = str(start) if pd.notna(start) else ""
     end_str: str = str(end) if pd.notna(end) else ""
@@ -146,6 +169,7 @@ def summarise(df: CanonFrame) -> SummaryPayload:
                     "peaks": months_peaks_records,
                     "average": months_avg_records,
                 },
+                "seasons": seasons_records,
             },
         },
     )

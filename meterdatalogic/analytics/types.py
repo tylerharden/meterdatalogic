@@ -66,6 +66,7 @@ class SummaryDatasets(TypedDict, total=False):
     profile24: List[Dict[str, float | str]]
     days: SeriesBreakdown
     months: SeriesBreakdown
+    seasons: List[Dict[str, float | str]]
 
 
 ### 
