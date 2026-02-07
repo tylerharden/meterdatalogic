@@ -5,8 +5,9 @@ import pandas as pd
 
 from .types import Insight, InsightContext
 from .config import InsightConfig
-from ..types import CanonFrame, ScenarioResult
-from .. import transform, utils
+from ...core.types import CanonFrame
+from ..types import ScenarioResult
+from ...core import transform, utils
 
 
 def _annual_total_cost(d: Optional[pd.DataFrame]) -> float:

@@ -295,9 +295,6 @@ def peak_from_profile(
     return float(peak_kw), t
 
 
-# ---------- More generic power-users' APIs ----------
-
-
 def profile(
     df: CanonFrame,
     *,

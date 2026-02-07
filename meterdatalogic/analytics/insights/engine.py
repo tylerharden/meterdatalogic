@@ -5,7 +5,7 @@ from typing import Iterable, List, Optional
 
 from .types import Insight, InsightContext, InsightEvaluator
 from .config import InsightConfig, default_config
-from ..types import CanonFrame
+from ...core.types import CanonFrame
 
 # Import evaluator groups
 from .evaluators_basic import (

@@ -2,8 +2,9 @@ from __future__ import annotations
 import pandas as pd
 from typing import cast
 
-from . import canon, utils, transform
-from .types import SummaryPayload, CanonFrame
+from ..core import canon, transform, utils
+from ..core.types import CanonFrame
+from .types import SummaryPayload
 from . import insights as insights_mod
 
 

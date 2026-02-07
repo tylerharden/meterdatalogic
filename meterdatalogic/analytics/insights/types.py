@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Protocol, TYPE_CHECKING
 import pandas as pd
 
-from ..types import CanonFrame, ScenarioResult
+from ...core.types import CanonFrame
+from ..types import ScenarioResult
 
 if TYPE_CHECKING:
     from .config import InsightConfig

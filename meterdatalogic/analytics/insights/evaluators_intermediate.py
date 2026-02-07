@@ -5,8 +5,8 @@ import pandas as pd
 
 from .types import Insight, InsightContext
 from .config import InsightConfig
-from ..types import CanonFrame
-from .. import transform, utils
+from ...core.types import CanonFrame
+from ...core import transform, utils
 
 
 def seasonal_variation(

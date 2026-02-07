@@ -2,8 +2,9 @@ from __future__ import annotations
 import pandas as pd
 from typing import IO, Optional, cast, TYPE_CHECKING
 
-from . import canon, utils, validate
-from .types import CanonFrame
+from ..io import validate
+from ..core import utils, canon
+from ..core.types import CanonFrame
 
 if TYPE_CHECKING:
     from nemreader import NEMFile

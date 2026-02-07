@@ -2,7 +2,7 @@ from __future__ import annotations
 import pandas as pd
 from typing import Optional, cast
 
-from . import canon, exceptions
+from ..core import exceptions, canon
 
 
 def assert_canon(df: pd.DataFrame) -> None:
