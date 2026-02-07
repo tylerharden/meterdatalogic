@@ -4,9 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import meterdatalogic.scenario as scenario
+from meterdatalogic import scenario, utils
 import meterdatalogic.types as mdtypes
-from meterdatalogic import utils
 
 
 @pytest.fixture

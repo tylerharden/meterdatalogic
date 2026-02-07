@@ -9,10 +9,7 @@ Covers:
 import pandas as pd
 import pandas.testing as pdt
 
-import meterdatalogic.formats as formats
-import meterdatalogic.ingest as ingest
-import meterdatalogic.canon as canon
-from meterdatalogic.validate import assert_canon
+from meterdatalogic import formats, ingest, canon, validate
 
 
 def _required_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -55,13 +52,13 @@ def test_to_logical_basic_series(canon_df_one_nmi):
 def test_roundtrip_logical_from_mixed_flows(canon_df_mixed_flows):
     # ingest adds flow/cadence_min and enforces canon
     df = ingest.from_dataframe(canon_df_mixed_flows)
-    assert_canon(df)
+    validate.assert_canon(df)
 
     obj = formats.to_logical(df)
     df2 = formats.from_logical(obj)
 
     # Validate output is canon
-    assert_canon(df2)
+    validate.assert_canon(df2)
 
     # Compare invariants instead of row-by-row (cadence/grouping may differ per-channel)
     # 1) Total energy per flow preserved

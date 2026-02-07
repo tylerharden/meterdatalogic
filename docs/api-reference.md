@@ -2,6 +2,29 @@
 
 Complete reference for all modules in meterdatalogic.
 
+## Import Pattern
+
+All modules use a simple, flat API:
+
+```python
+import meterdatalogic as ml
+
+# Data I/O
+df = ml.ingest.from_nem12("data.csv")
+ml.validate.assert_canon(df)
+logical = ml.formats.to_logical(df)
+
+# Core operations
+daily = ml.transform.aggregate(df, freq="1D")
+profile = ml.transform.profile(df)
+
+# Analytics
+summary = ml.summary.summarise(df)
+billables = ml.pricing.compute_billables(df, plan)
+insights = ml.insights.generate_insights(df)
+scenario_df = ml.scenario.run(df, ev=ev_config, pv=pv_config)
+```
+
 ---
 
 ## Core Modules

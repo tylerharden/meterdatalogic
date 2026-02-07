@@ -2,8 +2,7 @@
 
 import pandas as pd
 
-import meterdatalogic.transform as transform
-import meterdatalogic.ingest as ingest
+from meterdatalogic import transform, ingest
 
 
 def _cadence_min(idx):

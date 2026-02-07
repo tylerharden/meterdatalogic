@@ -50,38 +50,63 @@ Comprehensive documentation is available in the [docs/](docs/) folder:
 
 ```
 meterdatalogic/
-  __init__.py
-  canon.py          # Canonical schema definitions
-  types.py          # Type definitions (CanonFrame, Plan, etc.)
-  exceptions.py     # CanonError exception
-  utils.py          # Helper functions
-  ingest.py         # Data loading (NEM12, CSV, DataFrame)
-  validate.py       # Schema validation
-  transform.py      # Aggregation, ToU binning
-  summary.py        # JSON-ready summaries
-  pricing.py        # Tariff calculations
-  scenario.py       # Solar/battery/EV modeling
-  formats.py        # Format conversion
-  insights/         # Pattern detection & recommendations
+  __init__.py       # Public API exports
+  types.py          # Shared type definitions (CanonFrame, Plan, etc.)
+  py.typed          # Type checking marker
+  core/             # Core data structures and transformations
     __init__.py
-    engine.py       # Insight generation orchestration
-    config.py       # Configuration and thresholds
-    types.py        # Insight type definitions
-    evaluators_*.py # Evaluator functions
+    canon.py        # Canonical schema definitions and constants
+    exceptions.py   # CanonError exception
+    transform.py    # Aggregation, ToU binning, profile generation
+    types.py        # Core type definitions
+    utils.py        # Helper functions
+  io/               # Data input/output and validation
+    __init__.py
+    ingest.py       # Data loading (NEM12, CSV, DataFrame)
+    validate.py     # Schema validation
+    formats.py      # Format conversion (to/from JSON)
+    types.py        # I/O type definitions
+  analytics/        # Analysis and modeling
+    __init__.py
+    summary.py      # JSON-ready summaries
+    pricing.py      # Tariff calculations
+    scenario.py     # Solar/battery/EV modeling
+    types.py        # Analytics type definitions
+    insights/       # Pattern detection & recommendations
+      __init__.py
+      engine.py     # Insight generation orchestration
+      config.py     # Configuration and thresholds
+      types.py      # Insight type definitions
+      evaluators_*.py # Evaluator functions
 tests/              # Test suite
 docs/               # Documentation
 ```
 
 ### Module Overview
 
-- **ingest** — Load NEM12, CSV, or DataFrame to canonical format
-- **validate** — Enforce schema rules (tz-aware, sorted, unique timestamps)
-- **transform** — Aggregate by time/ToU, calculate profiles and peaks
-- **summary** — Generate JSON-ready summaries for dashboards
-- **pricing** — Calculate billables and costs from tariff plans
-- **scenario** — Model solar PV, battery storage, and EV charging
-- **insights** — Automated pattern detection and recommendations
-- **formats** — Convert between CanonFrame and JSON representations
+All modules are accessible via a clean, flat API:
+
+```python
+import meterdatalogic as ml
+
+# Data I/O
+ml.ingest      # Load NEM12, CSV, or DataFrame to canonical format
+ml.validate    # Enforce schema rules (tz-aware, sorted, unique timestamps)
+ml.formats     # Convert between CanonFrame and JSON representations
+
+# Core operations
+ml.canon       # Canonical schema definitions and constants
+ml.transform   # Aggregate by time/ToU, calculate profiles and peaks
+ml.utils       # Helper functions for common operations
+
+# Analytics
+ml.summary     # Generate JSON-ready summaries for dashboards
+ml.pricing     # Calculate billables and costs from tariff plans
+ml.scenario    # Model solar PV, battery storage, and EV charging
+ml.insights    # Automated pattern detection and recommendations
+```
+
+**Internal organization:** The codebase is organized into domain-based packages (`core/`, `io/`, `analytics/`) for maintainability, but users don't need to know about this internal structure.
 
 ---
 

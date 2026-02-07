@@ -2,6 +2,8 @@
 
 Practical recipes for common meterdatalogic workflows.
 
+> **Note:** All examples use the standard import pattern: `import meterdatalogic as ml`
+
 ---
 
 ## Data Loading

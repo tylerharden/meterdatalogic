@@ -1,43 +1,30 @@
 """meterdatalogic - Meter data transformation and analytics.
 
-Structure:
-    core      - Foundation types, data operations, utilities
-    io        - Data ingestion, validation, format conversion  
-    analytics - Pricing, scenarios, summaries, insights
+A lightweight library for meter data processing:
+- Canonical data model for reliable analytics
+- Composable modules: ingest, validate, transform, pricing, scenarios
+- Framework-agnostic design
+- Plot-ready outputs and JSON serialization
 
 Usage:
-    >>> from meterdatalogic import io, core, analytics
-    >>> df = io.ingest.from_nem12("data.csv")
-    >>> summary = analytics.summary.summarise(df)
+    >>> import meterdatalogic as ml
+    >>> df = ml.ingest.from_nem12("data.csv")
+    >>> ml.validate.assert_canon(df)
+    >>> summary = ml.summary.summarise(df)
+    >>> insights = ml.insights.generate_insights(df)
+
+Note: The library is organized internally into domain-based packages
+(core/, io/, analytics/) for clean code organization, but all modules
+are exposed at the top level for a simple, flat API.
 """
 
+# Flat public API - all modules accessible at top level
 from .io import formats, ingest, validate
 from .core import canon, transform, utils
 from .analytics import pricing, scenario, summary, insights
-
-# Expose namespaces for clean imports
-from . import core, io, analytics, types
-
-# Backwards compatibility - expose modules at top level
-import sys
-
-sys.modules['meterdatalogic.formats'] = formats
-sys.modules['meterdatalogic.ingest'] = ingest
-sys.modules['meterdatalogic.validate'] = validate
-sys.modules['meterdatalogic.canon'] = canon
-sys.modules['meterdatalogic.transform'] = transform
-sys.modules['meterdatalogic.utils'] = utils
-sys.modules['meterdatalogic.pricing'] = pricing
-sys.modules['meterdatalogic.scenario'] = scenario
-sys.modules['meterdatalogic.summary'] = summary
-sys.modules['meterdatalogic.insights'] = insights
+from . import types
 
 __all__ = [
-    # Namespaces
-    "core",
-    "io",
-    "analytics",
-    # Backwards compatibility (flat imports)
     "canon",
     "types",
     "utils",
