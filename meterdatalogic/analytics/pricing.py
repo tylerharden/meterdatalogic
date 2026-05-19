@@ -19,10 +19,7 @@ def _label_cycles(
     index: pd.DatetimeIndex,
     cycles: Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]],
 ) -> pd.Series:
-    """
-    Label each timestamp with the [start, end) cycle it belongs to, or <NA> if none.
-    Uses searchsorted on sorted starts; no merge_as_of; no reliance on extra columns.
-    """
+    """Assign each timestamp to a [start, end) cycle label, or <NA> if outside all cycles."""
     if index.tz is None:
         raise ValueError("Index must be tz-aware (e.g., Australia/Brisbane).")
 
@@ -75,18 +72,13 @@ def _cycle_billables(
     include_controlled_load: bool = False,
     include_total_import: bool = False,
 ) -> pd.DataFrame:
-    """
-    One row per cycle:
-      ['cycle', <band columns>, 'export_kwh', 'demand_kw', 'days_in_cycle']
-      Optionally: 'controlled_load_kwh', 'total_import_kwh'
-    """
-    # attach labels
+    """One row per cycle with TOU band kWh, export_kwh, demand_kw, days_in_cycle (plus optional controlled_load/total_import cols)."""
     dfx = df.copy()
     dfx["cycle"] = _label_cycles(pd.DatetimeIndex(df.index), cycles)
     dfx = dfx[dfx["cycle"].notna()].copy()
 
     # ---- IMPORT (TOU) ----
-    # If only single all-times band, we can do a fast-path.
+    # Fast path when there's a single all-hours band.
     single_all_time = (
         len(plan.usage_bands) == 1
         and plan.usage_bands[0].start == "00:00"
@@ -121,7 +113,7 @@ def _cycle_billables(
 
     # ---- DEMAND ----
     if plan.demand:
-        # Demand per cycle: filter by window, compute kW, then aggregate max per cycle
+        # Per-cycle demand: window filter + kW conversion + max groupby cycle
         imp = cast(CanonFrame, dfx[dfx["flow"] == "grid_import"].copy())
         demand = transform.aggregate(
             imp,
@@ -188,29 +180,11 @@ def compute_billables(
     include_total_import: bool = False,
 ) -> pd.DataFrame:
     """
-    Compute billable quantities for a given plan.
+    Compute billable quantities (TOU, demand, export) for a plan.
 
-    Parameters:
-    -----------
-    df : CanonFrame
-        Canonical meter data DataFrame
-    plan : Plan
-        Tariff plan with TOU bands, demand window, and rates
-    mode : Literal["monthly", "cycles"]
-        Aggregation period - "monthly" for calendar months, "cycles" for custom billing periods
-    cycles : Optional[Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]]]
-        Required when mode="cycles". List of (start_date, end_date) tuples for billing cycles
-    include_controlled_load : bool
-        If True, adds 'controlled_load_kwh' column with controlled load import totals
-    include_total_import : bool
-        If True, adds 'total_import_kwh' column with all import flows totaled
-
-    Returns:
-    --------
-    pd.DataFrame
-        - mode="monthly": columns ['month', <band cols>, 'export_kwh', 'demand_kw']
-        - mode="cycles": columns ['cycle', <band cols>, 'export_kwh', 'demand_kw', 'days_in_cycle']
-        - Optional: 'controlled_load_kwh', 'total_import_kwh' (if requested)
+    mode="monthly" returns one row per calendar month; mode="cycles" requires cycles= and
+    returns one row per billing cycle. Pass include_controlled_load or include_total_import
+    for optional extra columns.
     """
     if mode == "monthly":
         tou = transform.tou_bins(
@@ -255,7 +229,7 @@ def compute_billables(
             for b in plan.usage_bands:
                 tou[b.name] = 0.0
 
-        # Demand calculation or zeros aligned to base months
+        # Demand
         if plan.demand:
             demand = transform.aggregate(
                 df,
@@ -375,7 +349,6 @@ def estimate_costs(
         raise ValueError("bill must contain 'month' or 'cycle' column")
     out["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * days
 
-    # Coerce numeric columns to avoid object dtype from mappings
     for col in ("export_kwh", "energy_cost", "demand_cost", "fixed_cost"):
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
