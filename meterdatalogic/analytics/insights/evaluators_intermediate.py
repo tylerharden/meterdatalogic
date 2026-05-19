@@ -6,7 +6,7 @@ import pandas as pd
 from .types import Insight, InsightContext
 from .config import InsightConfig
 from ...core.types import CanonFrame
-from ...core import transform, utils
+from ...core import transform
 
 
 def seasonal_variation(
@@ -113,26 +113,20 @@ def peak_demand_characteristics(
 ) -> Optional[Insight]:
     if df.empty:
         return None
-    # Compute daily max kW within the demand window
-    dfx = df.copy()
-    # Convert kWh interval to kW and filter window
-    idx = pd.DatetimeIndex(dfx.index)
-    mask = utils.time_in_range(
-        utils.local_time_series(idx),
-        utils.parse_time_str(config.intermediate.demand_window_start),
-        utils.parse_time_str(config.intermediate.demand_window_end),
-    )
-    dfx = dfx[mask]
-    if dfx.empty:
-        return None
-    # kW from kWh using cadence
-    factor = 60.0 / dfx["cadence_min"].astype(float)
-    dfx = dfx.assign(kW=dfx["kwh"].astype(float) * factor)
-    daily = dfx.groupby(pd.Grouper(freq="1D"))[["kW"]].max().dropna()
+    # Use transform.aggregate to apply the demand window, kW conversion, and daily
+    # max in one call — avoids duplicating the cadence-to-kW formula inline.
+    daily = transform.aggregate(
+        df,
+        freq="1D",
+        metric="kW",
+        stat="max",
+        window_start=config.intermediate.demand_window_start,
+        window_end=config.intermediate.demand_window_end,
+    ).dropna()
     if daily.empty or len(daily) < 7:
         return None
-    mean_kw = float(daily["kW"].mean())
-    p95_kw = float(daily["kW"].quantile(0.95))
+    mean_kw = float(daily["demand_kw"].mean())
+    p95_kw = float(daily["demand_kw"].quantile(0.95))
     ratio = (p95_kw / mean_kw) if mean_kw > 0 else 0.0
     if ratio >= config.intermediate.spiky_ratio_threshold:
         return Insight(
