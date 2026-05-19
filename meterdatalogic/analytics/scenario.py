@@ -64,13 +64,21 @@ def _apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Seri
     unique_days = np.unique(dates)
 
     if ev.strategy == "immediate":
-        # Fill window from the start each eligible day until daily_kwh is met
+        # Fill window from the start each eligible day until daily_kwh is met.
+        # For wrap-around windows (e.g. 18:00–07:00) positions are in calendar
+        # order (00:00 before 18:00), so re-sort them from window_start so the
+        # EV charges from 18:00, not from midnight.
+        is_wraparound = start_t >= end_t
         for d in unique_days:
             mask = (dates == d) & day_mask & win_mask
             if not mask.any():
                 continue
             need = ev.daily_kwh
             positions = np.flatnonzero(mask)
+            if is_wraparound:
+                pos_times = np.array([idx[p].time() for p in positions])
+                is_evening = np.array([t >= start_t for t in pos_times])
+                positions = np.concatenate([positions[is_evening], positions[~is_evening]])
             for p in positions:
                 if need <= 1e-12:
                     break
@@ -211,37 +219,64 @@ def run(
     idx = pd.DatetimeIndex(s_import0.index)
     interval_h = utils.interval_hours_from_index(idx)
 
-    # 1) EV charging adds to local load
+    # 1) EV charging adds to net grid demand
     ev_series = _apply_ev(idx, ev, interval_h) if ev else pd.Series(0.0, index=idx)
-    local_load1 = (s_import0 + ev_series).to_numpy()
+    ev_arr = ev_series.to_numpy()
 
-    # 2) PV generation offsets load then exports
+    # 2) PV generation reduces net grid demand
     pv_series = _apply_pv(idx, pv, interval_h) if pv else pd.Series(0.0, index=idx)
     pv_arr = pv_series.to_numpy()
-    used_by_load = np.minimum(pv_arr, local_load1)
-    leftover_pv = pv_arr - used_by_load
-    import_prebat = local_load1 - used_by_load  # numpy array
-    export_prebat = s_export0.to_numpy() + leftover_pv  # no .copy(): battery mutates leftover_pv in-place
+
+    # Net-meter formulation: correctly handles customers with existing solar.
+    #
+    # For an interval where s_import0=0 and s_export0>0, the customer's solar is
+    # covering all load and exporting the surplus. Adding EV load should first
+    # consume from that surplus (reducing export) before drawing from the grid.
+    # The naive `s_import0 + ev` formulation misses this and produces physically
+    # impossible simultaneous import AND export at the same interval.
+    #
+    # net_before < 0  →  exporting (solar > load)
+    # net_before > 0  →  importing
+    # For import-only customers (s_export0=0), net_before = s_import0 and this
+    # reduces exactly to the original logic.
+    net_before = s_import0.to_numpy() - s_export0.to_numpy()
+    local_load_net = net_before + ev_arr - pv_arr  # positive=importing, negative=exporting
+
+    # Portion of new PV consumed by local load (for pv_self_consumption_pct).
+    # When already exporting (net_before + ev_arr < 0), all new PV adds to export.
+    used_by_load = np.maximum(np.minimum(pv_arr, net_before + ev_arr), 0.0)
+
+    # Pre-battery import demand and exportable excess.
+    import_prebat = np.maximum(local_load_net, 0.0)
+    combined_excess = np.maximum(-local_load_net, 0.0)
 
     # 3) Battery dispatch (self-consume)
     bat_dis = bat_ch = soc = np.zeros(len(idx))
     if battery and battery.capacity_kwh > 0 and battery.max_kw > 0:
         bat_dis, bat_ch, soc = _apply_battery_self_consume(
             import_prebat=import_prebat,
-            pv_excess_prebat=leftover_pv,
+            pv_excess_prebat=combined_excess,
             cfg=battery,
             interval_h=interval_h,
         )
         # import_prebat mutated in-place by battery discharge.
-        # leftover_pv (aliased by export_prebat) mutated in-place by battery charge.
+        # combined_excess mutated in-place by battery charge.
 
     # 4) Final after series
+    export_after = combined_excess
     s_import_after = pd.Series(import_prebat, index=idx, name="grid_import")
-    s_export_after = pd.Series(export_prebat, index=idx, name="grid_export_solar")
+    s_export_after = pd.Series(export_after, index=idx, name="grid_export_solar")
 
-    # Vectorized build of df_after (only positive intervals)
-    imp_mask = s_import_after.to_numpy() > 0
-    exp_mask = s_export_after.to_numpy() > 0
+    # Build df_after preserving original timestamp coverage.
+    # Using > 0 alone would drop zero-import intervals that exist in the original
+    # data (e.g. midday on a solar day where PV fully offsets load). Those zeroes
+    # are present in df_before, so dropping them from df_after causes profile24 to
+    # average over fewer samples → daytime mean appears inflated in the after plot.
+    orig_imp_ts = pd.Index(df_imp.index.unique()) if not df_imp.empty else pd.Index([])
+    orig_exp_ts = pd.Index(df_exp.index.unique()) if not df_exp.empty else pd.Index([])
+    idx_pd = pd.Index(idx)
+    imp_mask = idx_pd.isin(orig_imp_ts) | (s_import_after.to_numpy() > 0)
+    exp_mask = idx_pd.isin(orig_exp_ts) | (s_export_after.to_numpy() > 0)
     nmi_val = df["nmi"].iloc[0] if "nmi" in df.columns and len(df) else None
     cad_min = int(df["cadence_min"].iloc[0]) if "cadence_min" in df.columns and len(df) else None
 
