@@ -114,7 +114,7 @@ def peak_demand_characteristics(
     if df.empty:
         return None
     # Use transform.aggregate to apply the demand window, kW conversion, and daily
-    # max in one call — avoids duplicating the cadence-to-kW formula inline.
+    # max in one call - avoids duplicating the cadence-to-kW formula inline.
     daily = transform.aggregate(
         df,
         freq="1D",

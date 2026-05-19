@@ -99,7 +99,7 @@ def peak_time_bias(
         category="usage",
         title="Peak-time usage is moderate",
         message=(
-            f"Around {share:.0f}% of daily usage is in the {config.basic.peak_window_start}–{config.basic.peak_window_end} window."
+            f"Around {share:.0f}% of daily usage falls in the {config.basic.peak_window_start} to {config.basic.peak_window_end} window."
         ),
         severity="info",  # type: ignore[arg-type]
         metrics={"peak_share_pct": share},

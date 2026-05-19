@@ -22,7 +22,7 @@ from .types import (
 def _normalised_pv_shape(idx: pd.DatetimeIndex) -> np.ndarray:
     """
     Normalised PV power shape (0..1) using local wall time.
-    Daylight window 06:00–18:00; peak ≈ 12:00.
+    Daylight window 06:00-18:00, peak around 12:00.
     """
     if idx.tz is None:
         raise ValueError("Index must be timezone-aware for accurate PV alignment.")
@@ -65,7 +65,7 @@ def _apply_ev(idx: pd.DatetimeIndex, ev: EVConfig, interval_h: float) -> pd.Seri
 
     if ev.strategy == "immediate":
         # Fill window from the start each eligible day until daily_kwh is met.
-        # For wrap-around windows (e.g. 18:00–07:00) positions are in calendar
+        # For wrap-around windows (e.g. 18:00-07:00) positions are in calendar
         # order (00:00 before 18:00), so re-sort them from window_start so the
         # EV charges from 18:00, not from midnight.
         is_wraparound = start_t >= end_t
@@ -215,42 +215,31 @@ def run(
         s_export0 = (
             df_exp.groupby(level=0)["kwh"].sum().reindex(idx_full, fill_value=0.0)
         ).sort_index()
-    # Ensure a proper DatetimeIndex type for static typing and downstream utilities
     idx = pd.DatetimeIndex(s_import0.index)
     interval_h = utils.interval_hours_from_index(idx)
 
-    # 1) EV charging adds to net grid demand
+    # EV adds to net demand
     ev_series = _apply_ev(idx, ev, interval_h) if ev else pd.Series(0.0, index=idx)
     ev_arr = ev_series.to_numpy()
 
-    # 2) PV generation reduces net grid demand
+    # PV reduces net demand
     pv_series = _apply_pv(idx, pv, interval_h) if pv else pd.Series(0.0, index=idx)
     pv_arr = pv_series.to_numpy()
 
-    # Net-meter formulation: correctly handles customers with existing solar.
-    #
-    # For an interval where s_import0=0 and s_export0>0, the customer's solar is
-    # covering all load and exporting the surplus. Adding EV load should first
-    # consume from that surplus (reducing export) before drawing from the grid.
-    # The naive `s_import0 + ev` formulation misses this and produces physically
-    # impossible simultaneous import AND export at the same interval.
-    #
-    # net_before < 0  →  exporting (solar > load)
-    # net_before > 0  →  importing
-    # For import-only customers (s_export0=0), net_before = s_import0 and this
-    # reduces exactly to the original logic.
+    # Net metering: net_before = import - export. Negative means exporting (solar > load).
+    # EV load consumes export surplus before drawing from the grid, preventing
+    # simultaneous import + export in the same interval.
     net_before = s_import0.to_numpy() - s_export0.to_numpy()
     local_load_net = net_before + ev_arr - pv_arr  # positive=importing, negative=exporting
 
-    # Portion of new PV consumed by local load (for pv_self_consumption_pct).
-    # When already exporting (net_before + ev_arr < 0), all new PV adds to export.
+    # PV consumed locally (for self-consumption %). When already exporting, new PV adds to export.
     used_by_load = np.maximum(np.minimum(pv_arr, net_before + ev_arr), 0.0)
 
-    # Pre-battery import demand and exportable excess.
+    # Pre-battery demand and excess
     import_prebat = np.maximum(local_load_net, 0.0)
     combined_excess = np.maximum(-local_load_net, 0.0)
 
-    # 3) Battery dispatch (self-consume)
+    # Battery dispatch
     bat_dis = bat_ch = soc = np.zeros(len(idx))
     if battery and battery.capacity_kwh > 0 and battery.max_kw > 0:
         bat_dis, bat_ch, soc = _apply_battery_self_consume(
@@ -259,19 +248,13 @@ def run(
             cfg=battery,
             interval_h=interval_h,
         )
-        # import_prebat mutated in-place by battery discharge.
-        # combined_excess mutated in-place by battery charge.
 
-    # 4) Final after series
+    # Final series after battery
     export_after = combined_excess
     s_import_after = pd.Series(import_prebat, index=idx, name="grid_import")
     s_export_after = pd.Series(export_after, index=idx, name="grid_export_solar")
 
-    # Build df_after preserving original timestamp coverage.
-    # Using > 0 alone would drop zero-import intervals that exist in the original
-    # data (e.g. midday on a solar day where PV fully offsets load). Those zeroes
-    # are present in df_before, so dropping them from df_after causes profile24 to
-    # average over fewer samples → daytime mean appears inflated in the after plot.
+    # Keep timestamps from the original data even if import/export = 0 (avoids profile skew)
     orig_imp_ts = pd.Index(df_imp.index.unique()) if not df_imp.empty else pd.Index([])
     orig_exp_ts = pd.Index(df_exp.index.unique()) if not df_exp.empty else pd.Index([])
     idx_pd = pd.Index(idx)

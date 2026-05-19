@@ -6,11 +6,7 @@ from typing import List
 
 @dataclass
 class BasicInsightsConfig:
-    """Configuration for basic-level insights.
-
-    These thresholds are based on typical Australian residential usage patterns
-    and industry benchmarks for customer engagement.
-    """
+    """Thresholds for basic usage insights. Defaults based on typical AU residential patterns."""
 
     # Usage vs benchmark
     benchmark_kwh_per_year: float = 6000.0  # Typical 2-3 person household in QLD/NSW
@@ -29,18 +25,14 @@ class BasicInsightsConfig:
 
 @dataclass
 class IntermediateInsightsConfig:
-    """Configuration for intermediate-level insights.
-
-    These values are tuned for actionable recommendations based on
-    observed usage patterns and tariff structures in Australian retail markets.
-    """
+    """Thresholds for intermediate insights around seasonal patterns and tariff suitability."""
 
     # Seasonal variation
     warm_months: List[str] = field(
-        default_factory=lambda: ["12", "01", "02"]  # Dec–Feb (summer in AU)
+        default_factory=lambda: ["12", "01", "02"]  # Dec-Feb (summer in AU)
     )
     cool_months: List[str] = field(
-        default_factory=lambda: ["06", "07", "08"]  # Jun–Aug (winter in AU)
+        default_factory=lambda: ["06", "07", "08"]  # Jun-Aug (winter in AU)
     )
     seasonal_diff_pct_threshold: float = 25.0  # >25% variation suggests seasonal load
     min_months_required: int = 4  # Need 4+ months for reliable seasonal analysis
@@ -58,11 +50,7 @@ class IntermediateInsightsConfig:
 
 @dataclass
 class AdvancedInsightsConfig:
-    """Configuration for advanced-level insights.
-
-    These parameters support detection of specific behaviors (EV charging,
-    baseload changes) and scenario impact assessment.
-    """
+    """Thresholds for advanced insights: EV/battery windows and baseload step-change detection."""
 
     # EV impact window for attribution
     ev_peak_window_start: str = "16:00"  # Typical home arrival time

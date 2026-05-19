@@ -49,9 +49,8 @@ def _time_window_mask(
 
 def _assign_time_bands(idx: pd.DatetimeIndex, bands: Iterable[dict]) -> pd.Series:
     """
-    Assign each timestamp to a named time-of-day band.
-    bands: iterable of dicts with keys {"name","start","end"} in HH:MM ("24:00" supported).
-    Returns a Series indexed by idx with band names or 'unassigned'.
+    Assign each timestamp to a named band. bands is a list of {name, start, end} in HH:MM.
+    Unmatched slots are 'unassigned'.
     """
     times = utils.local_time_series(idx)
     assigned = pd.Series(index=idx, dtype="object")
@@ -90,19 +89,8 @@ def aggregate(
     hemisphere: Literal["northern", "southern"] | None = None,
 ) -> pd.DataFrame:
     """
-    Unified aggregation helper for resampling and grouping.
-
-    - Optionally filters to specific `flows`.
-    - Optionally applies a day/time window using `window_start`/`window_end` and `window_days`.
-    - Supports deriving power (kW) from per-interval energy (kWh) when `metric="kW"`.
-    - If `freq` is provided, resamples to that cadence before aggregating.
-      If `freq` is None, aggregates over the existing intervals.
-    - If `groupby` is provided, groups by those column(s) in addition to time.
-    - If `pivot=True`, columns are pivoted by the group keys; otherwise returns tidy rows.
-    - If `groupby` includes "season", requires `hemisphere` parameter to derive seasons from timestamps.
-
-    Returns a DataFrame whose index or column `t_start` reflects the time period when `freq` is set;
-    otherwise returns grouped rows without resampling.
+    Unified aggregation helper. Filters by flow, applies an optional time window, then resamples or groups.
+    Use metric="kW" to convert kWh to power. Use groupby="season" with hemisphere for seasonal splits.
     """
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("aggregate requires a DatetimeIndex index.")
@@ -111,7 +99,6 @@ def aggregate(
     if flows:
         s = s[s["flow"].isin(list(flows))]
     if s.empty:
-        # shape depends on pivot/grouping; return minimal structure
         if pivot and groupby:
             return pd.DataFrame(index=pd.DatetimeIndex([], name="t_start"))
         return pd.DataFrame(columns=["t_start", out_col or value_col])
@@ -130,7 +117,6 @@ def aggregate(
                 return pd.DataFrame(index=pd.DatetimeIndex([], name="t_start"))
             return pd.DataFrame(columns=["t_start", out_col or value_col])
 
-    # choose the base series to aggregate
     if metric == "kW":
         base = _compute_power_from_energy(s, energy_col=value_col)
         base_name = out_col or "demand_kw"
@@ -138,7 +124,6 @@ def aggregate(
         base = s[value_col].astype(float)
         base_name = out_col or value_col
 
-    # helper for applying aggregation function name
     def _apply_agg(x: pd.Series, how: str):
         if how == "max":
             return x.max()
@@ -146,14 +131,13 @@ def aggregate(
             return x.mean()
         if how == "sum":
             return x.sum()
-        # fall back to pandas agg by name
         return getattr(x, how)()
 
     grp_cols: list[str] = []
     if groupby is not None:
         grp_cols = [groupby] if isinstance(groupby, str) else list(groupby)
 
-    # Handle seasonal grouping by deriving season columns from DatetimeIndex
+    # Derive seasonal columns from the DatetimeIndex when groupby includes "season"
     if "season" in grp_cols:
         if hemisphere is None:
             raise ValueError("hemisphere parameter required when groupby includes 'season'")
@@ -161,20 +145,14 @@ def aggregate(
         idx = pd.DatetimeIndex(s.index)
         months = idx.month
         years = idx.year
-
-        # Map months to seasons
         season_months = SEASON_DEFINITIONS[hemisphere]
         month_to_season = {
             m: name for name, months_list in season_months.items() for m in months_list
         }
         s["_season"] = months.map(month_to_season)
-
-        # Adjust year for December (belongs to next year's season)
+        # December belongs to the following year's season
         s["_season_year"] = years + (months == 12).astype(int)
-
-        # Replace "season" in groupby with derived columns
         grp_cols = ["_season" if col == "season" else col for col in grp_cols]
-        # Add year grouping for seasonal aggregation
         if "_season_year" not in grp_cols:
             grp_cols.insert(grp_cols.index("_season") + 1, "_season_year")
 
@@ -189,11 +167,9 @@ def aggregate(
             out = out.reset_index().rename(columns={"_val": base_name})
         else:
             out = pd.DataFrame({base_name: [_apply_agg(base, stat if metric == "kW" else agg)]})
-        # Continue to cleanup
     elif grp_cols:
-        # With resampling and grouping
+        # Resample with grouping
         d = s.assign(_val=base)
-        # group then resample
         res = (
             d.groupby(grp_cols, observed=False)
             .resample(freq, label=label, closed=closed)["_val"]
@@ -201,12 +177,11 @@ def aggregate(
         )
         if pivot:
             out = res.unstack(grp_cols).rename_axis("t_start").sort_index()
-            # ensure float fill on empty
             out = out.fillna(0.0)
         else:
             out = res.reset_index().rename(columns={"_val": base_name})
     else:
-        # no group columns, pure resample
+        # Pure resample, no grouping
         res = base.resample(freq, label=label, closed=closed)
         if metric == "kW":
             series = res.max() if stat == "max" else (res.mean() if stat == "mean" else res.sum())
@@ -214,29 +189,25 @@ def aggregate(
             series = res.agg(agg)
         out = pd.DataFrame({base_name: series})
 
-    # ensure out is a DataFrame (res.unstack or other ops may yield a Series)
     if isinstance(out, pd.Series):
         out = out.to_frame(name=base_name)
 
-    # Clean up internal season columns if seasonal grouping was used
+    # Rename _season/_season_year back to season/year in all column contexts
     if groupby is not None:
         grp_list = [groupby] if isinstance(groupby, str) else list(groupby)
         if "season" in grp_list:
-            # Rename in regular columns
             rename_map = {"_season": "season", "_season_year": "year"}
             out = out.rename(columns=rename_map)
 
-            # Handle MultiIndex in columns (from pivot=True)
             if isinstance(out.columns, pd.MultiIndex):
                 out.columns = out.columns.set_names(
                     [rename_map.get(n, n) for n in out.columns.names]
                 )
 
-            # Handle MultiIndex in index
             if isinstance(out.index, pd.MultiIndex):
                 out.index = out.index.set_names([rename_map.get(n, n) for n in out.index.names])
 
-            # Sort by year, then season order for cleaner output (non-pivot only)
+            # Sort by year then season order (non-pivot only)
             if hemisphere and "season" in out.columns and "year" in out.columns:
                 season_months = SEASON_DEFINITIONS[hemisphere]
                 season_order = {name: idx for idx, name in enumerate(season_months.keys())}
@@ -258,21 +229,12 @@ def tou_bins(
     flows: Iterable[str] | None = ("grid_import",),
     value_col: str = "kwh",
 ) -> pd.DataFrame:
-    """
-    Aggregate energy into named time-of-use (TOU) bands.
-
-    This is the consolidated API for TOU aggregation. It assigns each
-    timestamp to a band using `bands` and then aggregates `value_col`
-    to the requested `out_freq` (e.g. monthly `1MS`). The returned
-    frame contains a `month` column (formatted via `utils.month_label`)
-    plus one column per band name.
-    """
+    """Aggregate energy into named TOU bands. Returns a month + per-band kWh frame at out_freq."""
     s = df.copy()
     if flows:
         s = s[s["flow"].isin(list(flows))]
     if s.empty:
         names = [str(b["name"]) for b in bands]
-        # return empty frame with expected columns
         return pd.DataFrame(columns=["month", *names])
 
     s["band"] = _assign_time_bands(pd.DatetimeIndex(s.index), bands).reindex(s.index)
@@ -326,10 +288,9 @@ def window_stats_from_profile(
         end_t = utils.parse_time_str(str(w["end"]))
         mask = utils.time_in_range(slot_times, start_t, end_t)
         window_kwh = float(profile_with_import.loc[mask, "import_total"].sum())
-        # Compute window duration in hours for avg_kw.
         start_m = start_t.hour * 60 + start_t.minute
         end_m = end_t.hour * 60 + end_t.minute
-        # "24:00" parses to time(0,0) so end_m==0 means the window runs to midnight.
+        # parse_time_str("24:00") returns time(0,0); map end_m=0 to 1440 for duration math
         if end_m == 0:
             end_m = 24 * 60
         window_hours = (
