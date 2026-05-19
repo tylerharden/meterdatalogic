@@ -20,7 +20,9 @@ def seasonal_variation(
     # Sum grid import across flow columns for warm and cool months
     monthly = monthly.copy()
     monthly["mm"] = monthly["month"].astype(str).str[-2:]
-    flow_cols = [c for c in monthly.columns if c not in ("month", "total_kwh", "mm")]
+    flow_cols = [c for c in monthly.columns if "import" in str(c)]
+    if not flow_cols:
+        flow_cols = [c for c in monthly.columns if c not in ("month", "total_kwh", "mm")]
     monthly["import_kwh"] = monthly[flow_cols].select_dtypes(float).sum(axis=1)
     warm = float(
         monthly.loc[monthly["mm"].isin(config.intermediate.warm_months), "import_kwh"].sum()

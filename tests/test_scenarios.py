@@ -197,3 +197,129 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
     assert hasattr(result, "df_before") and hasattr(result, "df_after")
     assert hasattr(result, "cost_before") and hasattr(result, "cost_after")
     assert called["pricing"] is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: multi-flow df must not double scenario totals
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def multi_flow_df(day_30min):
+    """Canonical df with both grid_import and grid_export_solar rows.
+
+    Mirrors a real solar customer file where each timestamp has two rows
+    (one import, one export). The scenario engine must not duplicate values
+    when building the after-series.
+    """
+    import_frame = utils.build_canon_frame(
+        day_30min,
+        np.full(len(day_30min), 0.5),
+        nmi="Q123",
+        channel="E1",
+        flow="grid_import",
+        cadence_min=30,
+    )
+    export_frame = utils.build_canon_frame(
+        day_30min,
+        np.full(len(day_30min), 0.1),
+        nmi="Q123",
+        channel="B1",
+        flow="grid_export_solar",
+        cadence_min=30,
+    )
+    return pd.concat([import_frame, export_frame]).sort_index()
+
+
+def test_run_no_scenario_preserves_totals(multi_flow_df):
+    """Regression: summary_before and summary_after totals must match the
+    baseline when no EV/PV/battery is added.
+
+    Before the idx_full fix, idx_full included duplicate timestamps (one per
+    flow), causing every value to be replicated and totals to double.
+    """
+    result = scenario.run(multi_flow_df)
+
+    before_import = result.summary_before["stats"]["total_import_kwh"]
+    after_import = result.summary_after["stats"]["total_import_kwh"]
+
+    before_export = result.summary_before["stats"]["solar_export_kwh"]
+    after_export = result.summary_after["stats"]["solar_export_kwh"]
+
+    # After = baseline (no additions); must not be doubled
+    assert abs(after_import - before_import) < 1e-6, (
+        f"Import doubled: before={before_import}, after={after_import}"
+    )
+    assert abs(after_export - before_export) < 1e-6, (
+        f"Export doubled: before={before_export}, after={after_export}"
+    )
+
+
+def test_run_multiflow_import_total_is_not_doubled(multi_flow_df):
+    """Regression: total_import_kwh in summary_before must reflect actual data,
+    not a doubled value due to duplicate-index reindex.
+
+    The fixture has 48 intervals × 0.5 kWh = 24.0 kWh import.
+    """
+    result = scenario.run(multi_flow_df)
+    expected_import = 48 * 0.5  # 24.0 kWh
+    actual = result.summary_before["stats"]["total_import_kwh"]
+    assert abs(actual - expected_import) < 0.01, (
+        f"Expected {expected_import} kWh import, got {actual} — possible doubling regression"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Battery behavior: with PV, battery must reduce grid import
+# ---------------------------------------------------------------------------
+
+def test_battery_with_pv_reduces_import(day_30min):
+    """A battery paired with PV should reduce grid import compared to PV alone.
+
+    The battery absorbs daytime PV excess and discharges in the evening,
+    reducing the net draw from the grid.
+    """
+    base = utils.build_canon_frame(
+        day_30min,
+        np.full(len(day_30min), 0.5),
+        nmi="Q",
+        channel="E1",
+        flow="grid_import",
+        cadence_min=30,
+    )
+    pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
+    bat_cfg = mdtypes.BatteryConfig(capacity_kwh=10.0, max_kw=5.0)
+
+    result_pv_only = scenario.run(base, pv=pv_cfg)
+    result_pv_bat = scenario.run(base, pv=pv_cfg, battery=bat_cfg)
+
+    import_pv = result_pv_only.summary_after["stats"]["total_import_kwh"]
+    import_pv_bat = result_pv_bat.summary_after["stats"]["total_import_kwh"]
+
+    assert import_pv_bat <= import_pv, (
+        f"Battery+PV import ({import_pv_bat}) should be ≤ PV-only import ({import_pv})"
+    )
+
+
+def test_battery_only_does_not_increase_import(day_30min):
+    """Battery without PV has no source to charge from (MVP: PV-only charging).
+    The after-import must equal the before-import — not increase.
+    """
+    base = utils.build_canon_frame(
+        day_30min,
+        np.full(len(day_30min), 0.5),
+        nmi="Q",
+        channel="E1",
+        flow="grid_import",
+        cadence_min=30,
+    )
+    bat_cfg = mdtypes.BatteryConfig(capacity_kwh=10.0, max_kw=5.0)
+
+    result = scenario.run(base, battery=bat_cfg)
+
+    before = result.summary_before["stats"]["total_import_kwh"]
+    after = result.summary_after["stats"]["total_import_kwh"]
+
+    assert after <= before + 1e-6, (
+        f"Battery-only raised import: before={before}, after={after}"
+    )
+

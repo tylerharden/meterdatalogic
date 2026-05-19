@@ -115,11 +115,12 @@ def data_completeness(
     cadence_min = int(utils.infer_cadence_minutes(idx))
     if len(idx) == 0 or cadence_min <= 0:
         return None
-    start = idx.min().normalize()
-    end = idx.max().normalize()
+    unique_idx = idx.unique()
+    start = unique_idx.min().normalize()
+    end = unique_idx.max().normalize()
     days = int((end - start).days) + 1
     expected_intervals = int(days * (1440 // cadence_min))
-    coverage = (len(idx) / expected_intervals * 100.0) if expected_intervals > 0 else 0.0
+    coverage = (len(unique_idx) / expected_intervals * 100.0) if expected_intervals > 0 else 0.0
 
     if coverage < config.basic.min_coverage_pct:
         return Insight(

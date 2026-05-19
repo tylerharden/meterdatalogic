@@ -191,7 +191,7 @@ def run(
     # Baseline import/export series (collapse to per-interval totals)
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("scenario.run requires a DatetimeIndex index.")
-    idx_full = pd.DatetimeIndex(df.index)
+    idx_full = pd.DatetimeIndex(df.index.unique())
     flows = df["flow"].astype(str)
     df_imp = df.loc[flows.str.contains("import", na=False)]
     df_exp = df.loc[flows.str.contains("export", na=False)]
@@ -221,7 +221,7 @@ def run(
     used_by_load = np.minimum(pv_arr, local_load1)
     leftover_pv = pv_arr - used_by_load
     import_prebat = local_load1 - used_by_load  # numpy array
-    export_prebat = s_export0.to_numpy() + leftover_pv.copy()
+    export_prebat = s_export0.to_numpy() + leftover_pv  # no .copy(): battery mutates leftover_pv in-place
 
     # 3) Battery dispatch (self-consume)
     bat_dis = bat_ch = soc = np.zeros(len(idx))
@@ -232,8 +232,8 @@ def run(
             cfg=battery,
             interval_h=interval_h,
         )
-        # After battery: import reduced by discharge; export reduced by charge (already in function)
-        # export_prebat already had pv leftover; battery charge from PV has been subtracted inside dispatcher
+        # import_prebat mutated in-place by battery discharge.
+        # leftover_pv (aliased by export_prebat) mutated in-place by battery charge.
 
     # 4) Final after series
     s_import_after = pd.Series(import_prebat, index=idx, name="grid_import")
@@ -284,8 +284,9 @@ def run(
     validate.assert_canon(df_after)
 
     # Summaries
-    summary_before = __import__("meterdatalogic").summary.summarise(df)
-    summary_after = __import__("meterdatalogic").summary.summarise(df_after)
+    from ..analytics import summary as _summary  # local import avoids circular dependency
+    summary_before = _summary.summarise(df)
+    summary_after = _summary.summarise(df_after)
 
     # Costs
     cost_before = cost_after = None

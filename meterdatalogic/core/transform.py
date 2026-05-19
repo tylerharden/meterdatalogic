@@ -357,7 +357,7 @@ def peak_from_profile(
     peak_interval_kwh = float(profile_with_import["import_total"].max())
     peak_kw = peak_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
     idx = int(profile_with_import["import_total"].to_numpy().argmax())
-    t = str(profile_with_import.loc[idx, "slot"]) if idx >= 0 else None
+    t = str(profile_with_import.iloc[idx]["slot"]) if idx >= 0 else None
     return float(peak_kw), t
 
 
@@ -399,7 +399,7 @@ def profile(
         if import_flows:
             cols = [c for c in flow_cols if c in set(import_flows)]
         else:
-            cols = [c for c in flow_cols if ("import" in str(c)) or str(c).startswith("grid_")]
+            cols = [c for c in flow_cols if "import" in str(c)]
             if not cols:
                 cols = flow_cols
         prof["import_total"] = prof[cols].select_dtypes(float).sum(axis=1)

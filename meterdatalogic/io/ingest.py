@@ -107,7 +107,7 @@ def from_dataframe(
     *,
     tz: str = canon.DEFAULT_TZ,
     channel_map: Optional[dict[str, str]] = None,
-    nmi: Optional[int] = None,
+    nmi: Optional[str] = None,
 ) -> CanonFrame:
     """
     Parse a provided DataFrame with canon-like columns
@@ -159,7 +159,7 @@ def from_nem12(
     *,
     tz: str = canon.DEFAULT_TZ,
     channel_map: Optional[dict[str, str]] = None,
-    nmi: Optional[int] = None,
+    nmi: Optional[str] = None,
 ) -> CanonFrame:
     """
     Parse a NEM12 file via nemreader.NEMFile.get_data_frame()

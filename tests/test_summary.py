@@ -6,7 +6,7 @@ import meterdatalogic as ml
 
 
 def test_summary_payload_structure(canon_df_mixed_flows):
-    df = ml.ingest.from_dataframe(canon_df_mixed_flows, nmi=1234567890)
+    df = ml.ingest.from_dataframe(canon_df_mixed_flows, nmi="Q1234567890")
     payload = ml.summary.summarise(df)
     assert "meta" in payload and "stats" in payload and "datasets" in payload
     assert payload["meta"]["cadence_min"] == 30
