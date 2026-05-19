@@ -182,19 +182,17 @@ def step_change_baseload(
     days = (idx.max().normalize() - idx.min().normalize()).days + 1 if len(idx) else 0
     if days < config.advanced.min_days_for_step_check:
         return None
-    # Compute overnight import per day and compare halves
-    times = utils.local_time_series(idx)
-    overnight_mask = utils.time_in_range(
-        times,
-        utils.parse_time_str(config.advanced.overnight_start),
-        utils.parse_time_str(config.advanced.overnight_end),
-    )
-    dfx = df[overnight_mask].copy()
-    if dfx.empty:
+    # Use transform.aggregate to apply the overnight window and daily sum in one call.
+    daily_df = transform.aggregate(
+        df,
+        freq="1D",
+        agg="sum",
+        window_start=config.advanced.overnight_start,
+        window_end=config.advanced.overnight_end,
+    ).dropna()
+    if len(daily_df) < config.advanced.min_days_for_step_check:
         return None
-    daily = dfx.groupby(pd.Grouper(freq="1D"))["kwh"].sum().dropna()
-    if len(daily) < config.advanced.min_days_for_step_check:
-        return None
+    daily = daily_df["kwh"]
     mid = len(daily) // 2
     before = float(daily.iloc[:mid].mean()) if mid > 0 else 0.0
     after = float(daily.iloc[mid:].mean()) if mid < len(daily) else 0.0

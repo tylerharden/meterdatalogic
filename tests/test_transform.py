@@ -1,6 +1,7 @@
-"""Tests for demand windows, grouping, and profiles in transform."""
+"""Tests for demand windows, grouping, profiles, and window_stats_from_profile."""
 
 import pandas as pd
+import pytest
 
 from meterdatalogic import transform, ingest
 
@@ -125,3 +126,62 @@ def test_tou_bins_accepts_24_00(canon_df_one_nmi, tou_bands_basic):
     # Should have columns 'off', 'peak', 'shoulder' (even if some are zeros)
     for name in ["off", "peak", "shoulder"]:
         assert name in out.columns
+
+
+# ------------------------------------------------------------------
+# window_stats_from_profile
+# ------------------------------------------------------------------
+
+
+def _uniform_profile(kwh_per_slot: float = 1.0) -> pd.DataFrame:
+    """Build a uniform 30-min average-day profile with import_total = kwh_per_slot."""
+    slots = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
+    return pd.DataFrame({"slot": slots, "import_total": kwh_per_slot})
+
+
+def test_window_stats_normal_window():
+    """Window 16:00-21:00 covers 10 slots (5 h) in a 30-min profile."""
+    prof = _uniform_profile(1.0)
+    result = transform.window_stats_from_profile(
+        prof, windows=[{"key": "peak", "start": "16:00", "end": "21:00"}], cadence_min=30
+    )
+    w = result["peak"]
+    assert w["kwh_per_day"] == pytest.approx(10.0)
+    assert w["avg_kw"] == pytest.approx(2.0)  # 10 kWh / 5 h
+    assert w["share_of_daily_pct"] == pytest.approx(10 / 48 * 100)
+
+
+def test_window_stats_24_00_end_boundary():
+    """'24:00' end boundary is treated as midnight; 17:00-24:00 = 14 slots (7 h)."""
+    prof = _uniform_profile(1.0)
+    result = transform.window_stats_from_profile(
+        prof, windows=[{"key": "evening", "start": "17:00", "end": "24:00"}], cadence_min=30
+    )
+    w = result["evening"]
+    assert w["kwh_per_day"] == pytest.approx(14.0)
+    assert w["avg_kw"] == pytest.approx(2.0)  # 14 kWh / 7 h
+
+
+def test_window_stats_wrap_around_midnight():
+    """Wrap-around window 22:00-02:00 covers 8 slots across midnight."""
+    prof = _uniform_profile(1.0)
+    result = transform.window_stats_from_profile(
+        prof, windows=[{"key": "overnight", "start": "22:00", "end": "02:00"}], cadence_min=30
+    )
+    w = result["overnight"]
+    assert w["kwh_per_day"] == pytest.approx(8.0)
+    assert w["avg_kw"] == pytest.approx(2.0)  # 8 kWh / 4 h
+
+
+def test_window_stats_multiple_windows_shares_sum():
+    """Non-overlapping windows covering the full day should share = 100%."""
+    prof = _uniform_profile(1.0)
+    windows = [
+        {"key": "morning", "start": "00:00", "end": "12:00"},
+        {"key": "afternoon", "start": "12:00", "end": "24:00"},
+    ]
+    result = transform.window_stats_from_profile(prof, windows=windows, cadence_min=30)
+    total_share = (
+        result["morning"]["share_of_daily_pct"] + result["afternoon"]["share_of_daily_pct"]
+    )
+    assert total_share == pytest.approx(100.0)

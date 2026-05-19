@@ -313,33 +313,25 @@ def window_stats_from_profile(
 
     windows: list of { key, start, end } in HH:MM.
     """
-
-    def hhmm_to_minutes(hhmm: str) -> int:
-        h_str, m_str = hhmm.split(":")
-        h_int = int(h_str)
-        m_int = int(m_str)
-        if h_int == 24 and m_int == 0:
-            return 24 * 60
-        return h_int * 60 + m_int
-
     total = (
         float(total_daily_kwh)
         if total_daily_kwh is not None
         else float(profile_with_import["import_total"].sum())
     )
+    # Pre-parse the slot column to time objects once (used for every window mask).
+    slot_times = profile_with_import["slot"].apply(utils.parse_time_str)
     out: dict[str, dict[str, float]] = {}
     for w in windows:
-        start_m = hhmm_to_minutes(str(w["start"]))
-        end_m = hhmm_to_minutes(str(w["end"]))
-        if end_m < start_m:  # wrap
-            mask = profile_with_import["slot"].apply(
-                lambda s: (hhmm_to_minutes(s) >= start_m) or (hhmm_to_minutes(s) < end_m)
-            )
-        else:
-            mask = profile_with_import["slot"].apply(
-                lambda s: (hhmm_to_minutes(s) >= start_m) and (hhmm_to_minutes(s) < end_m)
-            )
+        start_t = utils.parse_time_str(str(w["start"]))
+        end_t = utils.parse_time_str(str(w["end"]))
+        mask = utils.time_in_range(slot_times, start_t, end_t)
         window_kwh = float(profile_with_import.loc[mask, "import_total"].sum())
+        # Compute window duration in hours for avg_kw.
+        start_m = start_t.hour * 60 + start_t.minute
+        end_m = end_t.hour * 60 + end_t.minute
+        # "24:00" parses to time(0,0) so end_m==0 means the window runs to midnight.
+        if end_m == 0:
+            end_m = 24 * 60
         window_hours = (
             (end_m - start_m) / 60.0 if end_m >= start_m else ((24 * 60 - start_m) + end_m) / 60.0
         )
