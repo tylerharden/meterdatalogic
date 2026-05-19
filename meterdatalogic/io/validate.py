@@ -57,7 +57,5 @@ def validate_nmi(df: pd.DataFrame, nmi: Optional[str] = None) -> pd.DataFrame:
         return filtered
 
     if len(nmis) > 1:
-        raise ValueError(
-            f"Multiple NMIs detected: {', '.join(nmi_strs)}. Please specify an NMI."
-        )
+        raise ValueError(f"Multiple NMIs detected: {', '.join(nmi_strs)}. Please specify an NMI.")
     return df

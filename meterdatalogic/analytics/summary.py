@@ -8,7 +8,9 @@ from .types import SummaryPayload
 from . import insights as insights_mod
 
 
-def summarise(df: CanonFrame, hemisphere: Literal["northern", "southern"] = "southern") -> SummaryPayload:
+def summarise(
+    df: CanonFrame, hemisphere: Literal["northern", "southern"] = "southern"
+) -> SummaryPayload:
     # Configure windows here for easy adjustment
     WINDOWS = [
         {"key": "overnight", "start": "00:00", "end": "05:00"},
@@ -90,23 +92,20 @@ def summarise(df: CanonFrame, hemisphere: Literal["northern", "southern"] = "sou
 
     # Seasonal breakdown using aggregate directly with monthly resampling
     seasons_df = transform.aggregate(
-        df, 
-        freq="1MS", 
-        groupby=["season", "flow"], 
-        hemisphere=hemisphere, 
+        df,
+        freq="1MS",
+        groupby=["season", "flow"],
+        hemisphere=hemisphere,
         pivot=False,
         value_col="kwh",
-        agg="sum"
+        agg="sum",
     )
     if not seasons_df.empty:
         # Pivot flow columns for consistent structure with monthly/daily breakdowns
         seasons_df = seasons_df.pivot_table(
-            index=["season", "year"],
-            columns="flow",
-            values="kwh",
-            aggfunc="sum"
+            index=["season", "year"], columns="flow", values="kwh", aggfunc="sum"
         ).reset_index()
-    
+
     seasons_records: list[dict[str, float | str]] = (
         seasons_df.to_dict(orient="records") if not seasons_df.empty else []
     )  # type: ignore[assignment]

@@ -4,6 +4,7 @@ import pandas as pd
 
 Flow = Literal["grid_import", "controlled_load_import", "grid_export_solar"]
 
+
 class CanonFrame(pd.DataFrame):
     """
     Strongly-typed canonical interval dataframe.

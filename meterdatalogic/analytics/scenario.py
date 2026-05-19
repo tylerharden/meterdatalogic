@@ -320,6 +320,7 @@ def run(
 
     # Summaries
     from ..analytics import summary as _summary  # local import avoids circular dependency
+
     summary_before = _summary.summarise(df)
     summary_after = _summary.summarise(df_after)
 

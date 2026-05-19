@@ -2,7 +2,7 @@
 
 This module aggregates types from:
 - core.types: CanonFrame, Flow
-- io.types: LogicalDay, LogicalSeries, LogicalCanon  
+- io.types: LogicalDay, LogicalSeries, LogicalCanon
 - analytics.types: Plan, EVConfig, PVConfig, BatteryConfig, etc.
 
 For new code, prefer importing directly from the specific modules:

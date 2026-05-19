@@ -235,6 +235,7 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
 # Regression: multi-flow df must not double scenario totals
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def multi_flow_df(day_30min):
     """Canonical df with both grid_import and grid_export_solar rows.
@@ -280,12 +281,12 @@ def test_run_no_scenario_preserves_totals(multi_flow_df):
     after_export = result.summary_after["stats"]["solar_export_kwh"]
 
     # After = baseline (no additions); must not be doubled
-    assert abs(after_import - before_import) < 1e-6, (
-        f"Import doubled: before={before_import}, after={after_import}"
-    )
-    assert abs(after_export - before_export) < 1e-6, (
-        f"Export doubled: before={before_export}, after={after_export}"
-    )
+    assert (
+        abs(after_import - before_import) < 1e-6
+    ), f"Import doubled: before={before_import}, after={after_import}"
+    assert (
+        abs(after_export - before_export) < 1e-6
+    ), f"Export doubled: before={before_export}, after={after_export}"
 
 
 def test_run_multiflow_import_total_is_not_doubled(multi_flow_df):
@@ -298,14 +299,15 @@ def test_run_multiflow_import_total_is_not_doubled(multi_flow_df):
     result = scenario.run(multi_flow_df)
     expected_import = 32 * 0.5  # 16.0 kWh (night slots only)
     actual = result.summary_before["stats"]["total_import_kwh"]
-    assert abs(actual - expected_import) < 0.01, (
-        f"Expected {expected_import} kWh import, got {actual} — possible doubling regression"
-    )
+    assert (
+        abs(actual - expected_import) < 0.01
+    ), f"Expected {expected_import} kWh import, got {actual} — possible doubling regression"
 
 
 # ---------------------------------------------------------------------------
 # Battery behavior: with PV, battery must reduce grid import
 # ---------------------------------------------------------------------------
+
 
 def test_battery_with_pv_reduces_import(day_30min):
     """A battery paired with PV should reduce grid import compared to PV alone.
@@ -330,9 +332,9 @@ def test_battery_with_pv_reduces_import(day_30min):
     import_pv = result_pv_only.summary_after["stats"]["total_import_kwh"]
     import_pv_bat = result_pv_bat.summary_after["stats"]["total_import_kwh"]
 
-    assert import_pv_bat <= import_pv, (
-        f"Battery+PV import ({import_pv_bat}) should be ≤ PV-only import ({import_pv})"
-    )
+    assert (
+        import_pv_bat <= import_pv
+    ), f"Battery+PV import ({import_pv_bat}) should be ≤ PV-only import ({import_pv})"
 
 
 def test_battery_only_does_not_increase_import(day_30min):
@@ -354,9 +356,7 @@ def test_battery_only_does_not_increase_import(day_30min):
     before = result.summary_before["stats"]["total_import_kwh"]
     after = result.summary_after["stats"]["total_import_kwh"]
 
-    assert after <= before + 1e-6, (
-        f"Battery-only raised import: before={before}, after={after}"
-    )
+    assert after <= before + 1e-6, f"Battery-only raised import: before={before}, after={after}"
 
 
 def test_battery_without_pv_is_strict_noop(day_30min):
@@ -503,7 +503,6 @@ def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
     solar-era daytime slots to be computed over fewer (all-positive) samples,
     biasing the daytime average upward.
     """
-    import meterdatalogic as ml
 
     # Build two days where slots 12:00–14:00 have zero import (mimicking full
     # solar offset). Other daytime slots have modest import.
@@ -516,14 +515,16 @@ def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
 
     # Build a minimal canonical frame from ingest (not raw build_canon_frame)
     # so it matches what real data looks like.
-    raw = pd.DataFrame({
-        "t_start": idx,
-        "nmi": "Q",
-        "channel": "E1",
-        "flow": "grid_import",
-        "kwh": kwh_vals,
-        "cadence_min": 30,
-    }).set_index("t_start")
+    raw = pd.DataFrame(
+        {
+            "t_start": idx,
+            "nmi": "Q",
+            "channel": "E1",
+            "flow": "grid_import",
+            "kwh": kwh_vals,
+            "cadence_min": 30,
+        }
+    ).set_index("t_start")
 
     result = scenario.run(
         raw,
@@ -662,6 +663,7 @@ def test_run_pv_battery_trace_matches_dispatch(day_30min):
 # PV-only (stacked) scenario: customer already has solar export
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def solar_customer_df(day_30min):
     """Canonical df for a net-metered solar customer (stacked case).
@@ -704,14 +706,16 @@ def test_battery_only_with_existing_solar_reduces_import_and_export(solar_custom
     bat_cfg = mdtypes.BatteryConfig(capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9)
     result = scenario.run(solar_customer_df, battery=bat_cfg)
 
-    assert result.delta["import_kwh_delta"] < 0, (
-        "Battery should reduce import by discharging against evening load"
-    )
-    assert result.delta["export_kwh_delta"] < 0, (
-        "Battery should reduce export by absorbing solar that would have been sent to grid"
-    )
+    assert (
+        result.delta["import_kwh_delta"] < 0
+    ), "Battery should reduce import by discharging against evening load"
+    assert (
+        result.delta["export_kwh_delta"] < 0
+    ), "Battery should reduce export by absorbing solar that would have been sent to grid"
     assert result.explain["battery_charge_kwh"] > 0, "Battery must have charged from existing solar"
-    assert result.explain["battery_discharge_kwh"] > 0, "Battery must have discharged to reduce import"
+    assert (
+        result.explain["battery_discharge_kwh"] > 0
+    ), "Battery must have discharged to reduce import"
 
 
 def test_pv_stacked_increases_export_and_decreases_import(solar_customer_df):
@@ -735,13 +739,15 @@ def test_pv_stacked_export_equals_original_plus_new_excess(solar_customer_df, da
 
     orig_import = (
         solar_customer_df[solar_customer_df["flow"] == "grid_import"]
-        .groupby(level=0)["kwh"].sum()
+        .groupby(level=0)["kwh"]
+        .sum()
         .reindex(day_30min, fill_value=0.0)
         .to_numpy()
     )
     orig_export = (
         solar_customer_df[solar_customer_df["flow"] == "grid_export_solar"]
-        .groupby(level=0)["kwh"].sum()
+        .groupby(level=0)["kwh"]
+        .sum()
         .reindex(day_30min, fill_value=0.0)
         .to_numpy()
     )
@@ -776,9 +782,9 @@ def test_pv_self_consumption_pct_is_accurate(day_30min):
 
     actual_pct = result.explain.get("pv_self_consumption_pct")
     assert actual_pct is not None
-    assert abs(actual_pct - expected_pct) < 1e-6, (
-        f"pv_self_consumption_pct={actual_pct:.4f}%, expected={expected_pct:.4f}%"
-    )
+    assert (
+        abs(actual_pct - expected_pct) < 1e-6
+    ), f"pv_self_consumption_pct={actual_pct:.4f}%, expected={expected_pct:.4f}%"
 
 
 def test_pv_does_not_change_evening_peak_demand(day_30min):
@@ -808,6 +814,7 @@ def test_pv_does_not_change_evening_peak_demand(day_30min):
 # ---------------------------------------------------------------------------
 # Net-meter formulation: EV + solar customer correctness
 # ---------------------------------------------------------------------------
+
 
 def test_ev_on_solar_customer_no_simultaneous_import_and_export(solar_customer_df, day_30min):
     """Regression: adding EV to a solar customer must not produce simultaneous
@@ -857,7 +864,8 @@ def test_ev_on_solar_customer_reduces_export_before_adding_import(solar_customer
     )
     baseline_export = (
         solar_customer_df[solar_customer_df["flow"] == "grid_export_solar"]
-        .groupby(level=0)["kwh"].sum()
+        .groupby(level=0)["kwh"]
+        .sum()
         .reindex(day_30min, fill_value=0.0)
         .to_numpy()
     )

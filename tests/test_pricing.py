@@ -45,7 +45,9 @@ def test_no_demand_no_export(halfhour_rng, monkeypatch):
     )
     # Plan with a single all-day band, no demand or feed-in.
     plan = mdtypes.Plan(
-        usage_bands=[mdtypes.ToUBand(name="peak_kwh", start="00:00", end="24:00", rate_c_per_kwh=20.0)],
+        usage_bands=[
+            mdtypes.ToUBand(name="peak_kwh", start="00:00", end="24:00", rate_c_per_kwh=20.0)
+        ],
         demand=None,
         fixed_c_per_day=0.0,
         feed_in_c_per_kwh=0.0,
@@ -87,7 +89,9 @@ def test_feed_in_credit_negative(halfhour_rng, monkeypatch):
     """Export presence should create a non-positive (negative/zero) feed-in credit."""
     df = _mk_io_week(halfhour_rng)
     plan = mdtypes.Plan(
-        usage_bands=[mdtypes.ToUBand(name="peak_kwh", start="00:00", end="24:00", rate_c_per_kwh=30.0)],
+        usage_bands=[
+            mdtypes.ToUBand(name="peak_kwh", start="00:00", end="24:00", rate_c_per_kwh=30.0)
+        ],
         demand=None,
         fixed_c_per_day=0.0,
         feed_in_c_per_kwh=5.0,
@@ -135,7 +139,9 @@ def test_pricing_estimate_monthly_cost(canon_df_mixed_flows):
             mdtypes.ToUBand(name="peak", start="16:00", end="21:00", rate_c_per_kwh=45.0),
             mdtypes.ToUBand(name="shoulder", start="21:00", end="24:00", rate_c_per_kwh=28.0),
         ],
-        demand=mdtypes.DemandCharge(window_start="16:00", window_end="21:00", days="MF", rate_per_kw_per_month=12.0),
+        demand=mdtypes.DemandCharge(
+            window_start="16:00", window_end="21:00", days="MF", rate_per_kw_per_month=12.0
+        ),
         fixed_c_per_day=95.0,
         feed_in_c_per_kwh=6.0,
     )
@@ -177,7 +183,9 @@ def test_compute_billables_optional_flows(halfhour_rng):
     df = pd.concat([import_df, cl_df, export_df]).sort_index()
 
     plan = mdtypes.Plan(
-        usage_bands=[mdtypes.ToUBand(name="all_day", start="00:00", end="24:00", rate_c_per_kwh=25.0)],
+        usage_bands=[
+            mdtypes.ToUBand(name="all_day", start="00:00", end="24:00", rate_c_per_kwh=25.0)
+        ],
         demand=None,
         fixed_c_per_day=100.0,
         feed_in_c_per_kwh=8.0,

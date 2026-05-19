@@ -12,14 +12,14 @@ SEASON_DEFINITIONS = {
         "Winter": [12, 1, 2],
         "Spring": [3, 4, 5],
         "Summer": [6, 7, 8],
-        "Autumn": [9, 10, 11]
+        "Autumn": [9, 10, 11],
     },
     "southern": {
         "Summer": [12, 1, 2],
         "Autumn": [3, 4, 5],
         "Winter": [6, 7, 8],
-        "Spring": [9, 10, 11]
-    }
+        "Spring": [9, 10, 11],
+    },
 }
 
 
@@ -152,29 +152,28 @@ def aggregate(
     grp_cols: list[str] = []
     if groupby is not None:
         grp_cols = [groupby] if isinstance(groupby, str) else list(groupby)
-    
+
     # Handle seasonal grouping by deriving season columns from DatetimeIndex
     if "season" in grp_cols:
         if hemisphere is None:
             raise ValueError("hemisphere parameter required when groupby includes 'season'")
-        
+
         idx = pd.DatetimeIndex(s.index)
         months = idx.month
         years = idx.year
-        
+
         # Map months to seasons
         season_months = SEASON_DEFINITIONS[hemisphere]
-        month_to_season = {m: name for name, months_list in season_months.items() for m in months_list}
+        month_to_season = {
+            m: name for name, months_list in season_months.items() for m in months_list
+        }
         s["_season"] = months.map(month_to_season)
-        
+
         # Adjust year for December (belongs to next year's season)
         s["_season_year"] = years + (months == 12).astype(int)
-        
+
         # Replace "season" in groupby with derived columns
-        grp_cols = [
-            "_season" if col == "season" else col 
-            for col in grp_cols
-        ]
+        grp_cols = ["_season" if col == "season" else col for col in grp_cols]
         # Add year grouping for seasonal aggregation
         if "_season_year" not in grp_cols:
             grp_cols.insert(grp_cols.index("_season") + 1, "_season_year")
@@ -218,7 +217,7 @@ def aggregate(
     # ensure out is a DataFrame (res.unstack or other ops may yield a Series)
     if isinstance(out, pd.Series):
         out = out.to_frame(name=base_name)
-    
+
     # Clean up internal season columns if seasonal grouping was used
     if groupby is not None:
         grp_list = [groupby] if isinstance(groupby, str) else list(groupby)
@@ -226,21 +225,27 @@ def aggregate(
             # Rename in regular columns
             rename_map = {"_season": "season", "_season_year": "year"}
             out = out.rename(columns=rename_map)
-            
+
             # Handle MultiIndex in columns (from pivot=True)
             if isinstance(out.columns, pd.MultiIndex):
-                out.columns = out.columns.set_names([rename_map.get(n, n) for n in out.columns.names])
-            
-            # Handle MultiIndex in index  
+                out.columns = out.columns.set_names(
+                    [rename_map.get(n, n) for n in out.columns.names]
+                )
+
+            # Handle MultiIndex in index
             if isinstance(out.index, pd.MultiIndex):
                 out.index = out.index.set_names([rename_map.get(n, n) for n in out.index.names])
-            
+
             # Sort by year, then season order for cleaner output (non-pivot only)
             if hemisphere and "season" in out.columns and "year" in out.columns:
                 season_months = SEASON_DEFINITIONS[hemisphere]
                 season_order = {name: idx for idx, name in enumerate(season_months.keys())}
                 out = out.assign(_order=out["season"].map(season_order))
-                out = out.sort_values(["year", "_order"]).drop(columns=["_order"]).reset_index(drop=True)
+                out = (
+                    out.sort_values(["year", "_order"])
+                    .drop(columns=["_order"])
+                    .reset_index(drop=True)
+                )
 
     return out
 

@@ -37,5 +37,3 @@ __all__ = [
     "scenario",
     "insights",
 ]
-
-
