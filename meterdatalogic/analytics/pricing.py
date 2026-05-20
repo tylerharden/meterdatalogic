@@ -1,84 +1,81 @@
 from __future__ import annotations
 import numpy as np
-import pandas as pd
-from typing import Iterable, Tuple, Literal, Optional, cast
+import polars as pl
+from typing import Iterable, Tuple, Literal, Optional
 
-from ..core import transform
-
+from ..core import transform, utils
 from ..core.types import CanonFrame
 from ..analytics.types import Plan
-from ..core import utils
 
 
 def _tznorm(ts, tz):
-    ts = pd.Timestamp(ts)
-    return ts.tz_localize(tz) if ts.tz is None else ts.tz_convert(tz)
+    import datetime as _dt
+    if isinstance(ts, str):
+        ts = pl.Series([ts]).str.strptime(pl.Datetime("us"), "%Y-%m-%d").to_list()[0]
+    if isinstance(ts, _dt.datetime):
+        if ts.tzinfo is None:
+            return ts.replace(tzinfo=_dt.timezone.utc)  # placeholder; tz convert below
+    return ts
 
 
 def _label_cycles(
-    index: pd.DatetimeIndex,
-    cycles: Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]],
-) -> pd.Series:
-    """Assign each timestamp to a [start, end) cycle label, or <NA> if outside all cycles."""
-    if index.tz is None:
-        raise ValueError("Index must be tz-aware (e.g., Australia/Brisbane).")
+    t_start: pl.Series,
+    cycles: Iterable[Tuple[str | object, str | object]],
+) -> pl.Series:
+    """Assign each timestamp to a [start, end) cycle label, or null if outside all cycles."""
+    import datetime as _dt
 
-    tz = index.tz
-    # normalise to midnight in local tz for day math
-    starts, ends = [], []
+    tz = t_start.dtype.time_zone
+    if tz is None:
+        raise ValueError("t_start must be tz-aware.")
+
+    starts_dt: list[_dt.datetime] = []
+    ends_dt: list[_dt.datetime] = []
+    labels: list[str] = []
+
     for s, e in cycles:
-        s = _tznorm(s, tz).normalize()
-        e = _tznorm(e, tz).normalize()
-        e = e + pd.Timedelta(days=1)
-        if e <= s:
-            raise ValueError(f"Cycle end must be after start: {s} .. {e}")
-        starts.append(s)
-        ends.append(e)
+        s_pl = pl.Series([str(s)]).str.strptime(pl.Date, "%Y-%m-%d").to_list()[0] if isinstance(s, str) else s
+        e_pl = pl.Series([str(e)]).str.strptime(pl.Date, "%Y-%m-%d").to_list()[0] if isinstance(e, str) else e
+        # Convert date to tz-aware datetime at midnight
+        s_dt = _dt.datetime(s_pl.year, s_pl.month, s_pl.day)
+        e_dt = _dt.datetime(e_pl.year, e_pl.month, e_pl.day) + _dt.timedelta(days=1)
+        starts_dt.append(s_dt)
+        ends_dt.append(e_dt)
+        labels.append(f"{s_pl}→{e_pl}")
 
-    # sort by start
-    order = np.argsort(starts)
-    starts = pd.DatetimeIndex([starts[i] for i in order]).tz_convert(tz)
-    ends = pd.DatetimeIndex([ends[i] for i in order]).tz_convert(tz)
-    labels = [
-        f"{starts[i].date()}→{(ends[i] - pd.Timedelta(days=1)).date()}" for i in range(len(starts))
-    ]
+    # Sort by start
+    order = np.argsort([s.timestamp() for s in starts_dt])
+    starts_sorted = [starts_dt[i] for i in order]
+    ends_sorted = [ends_dt[i] for i in order]
+    labels_sorted = [labels[i] for i in order]
 
-    # map each ts to the last start <= ts using searchsorted
-    def _i8(idx: pd.DatetimeIndex) -> np.ndarray:
-        # Convert to int64 nanoseconds for searchsorted in a Pylance-friendly way
-        return idx.to_numpy(dtype="datetime64[ns]").astype("int64", copy=False)
+    starts_ns = np.array([int(s.timestamp() * 1e9) for s in starts_sorted])
+    ends_ns = np.array([int(e.timestamp() * 1e9) for e in ends_sorted])
 
-    ts_i8 = _i8(index)
-    starts_i8 = _i8(starts)
-    ends_i8 = _i8(ends)
+    # Convert t_start to UTC nanoseconds for searchsorted
+    ts_ns = (t_start.dt.convert_time_zone("UTC").dt.epoch(time_unit="ns").to_numpy())
 
-    # idx = index of the candidate cycle (by start), or -1 if before first start
-    idx = np.searchsorted(starts_i8, ts_i8, side="right") - 1
-    valid = (idx >= 0) & (ts_i8 < ends_i8[np.clip(idx, 0, len(ends_i8) - 1)])
+    idx = np.searchsorted(starts_ns, ts_ns, side="right") - 1
+    valid = (idx >= 0) & (ts_ns < ends_ns[np.clip(idx, 0, len(ends_ns) - 1)])
 
-    out = np.array([pd.NA] * len(index), dtype=object)
-    out[valid] = np.array(labels, dtype=object)[idx[valid]]
-    return pd.Series(out, index=index, dtype="string")
-
-
-# ------------------ billables over cycles ------------------
+    result = np.array([None] * len(t_start), dtype=object)
+    result[valid] = np.array(labels_sorted, dtype=object)[idx[valid]]
+    return pl.Series(result.tolist(), dtype=pl.String)
 
 
 def _cycle_billables(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     plan: Plan,
-    cycles: Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]],
+    cycles: Iterable[Tuple[str | object, str | object]],
     *,
     include_controlled_load: bool = False,
     include_total_import: bool = False,
-) -> pd.DataFrame:
-    """One row per cycle with TOU band kWh, export_kwh, demand_kw, days_in_cycle (plus optional controlled_load/total_import cols)."""
-    dfx = df.copy()
-    dfx["cycle"] = _label_cycles(pd.DatetimeIndex(df.index), cycles)
-    dfx = dfx[dfx["cycle"].notna()].copy()
+) -> pl.DataFrame:
+    """One row per cycle: TOU band kWh, export_kwh, demand_kw, days_in_cycle."""
+    dfx = df.with_columns(_label_cycles(df["t_start"], cycles).alias("cycle"))
+    dfx = dfx.filter(pl.col("cycle").is_not_null())
 
     # ---- IMPORT (TOU) ----
-    # Fast path when there's a single all-hours band.
     single_all_time = (
         len(plan.usage_bands) == 1
         and plan.usage_bands[0].start == "00:00"
@@ -87,36 +84,41 @@ def _cycle_billables(
     if single_all_time:
         band_name = plan.usage_bands[0].name
         tou = (
-            dfx[dfx["flow"] == "grid_import"]
-            .groupby("cycle", as_index=False)
-            .agg(**{band_name: ("kwh", "sum")})
+            dfx.filter(pl.col("flow") == "grid_import")
+            .group_by("cycle")
+            .agg(pl.col("kwh").sum().alias(band_name))
         )
     else:
-        # full binning then group
-        tb = transform.tou_bins(
-            dfx[dfx["flow"] == "grid_import"],
-            bands=[b.__dict__ for b in plan.usage_bands],
+        imp = dfx.filter(pl.col("flow") == "grid_import").with_columns(
+            pl.col("cycle").alias("_cycle_bak")
         )
-        # ensure we still have 'cycle' to group by
-        if "cycle" not in tb.columns:
-            # left-join cycle back by index if tou_bins dropped it
-            imp = dfx[dfx["flow"] == "grid_import"][["cycle"]].copy()
-            tb = imp.join(tb, how="left")
-        tou = tb.groupby("cycle", as_index=False).sum(numeric_only=True)
+        tb = transform.tou_bins(imp, bands=[b.__dict__ for b in plan.usage_bands])
+        # tou_bins drops the cycle column; re-derive by joining on month
+        if "cycle" not in tb.columns and not tb.is_empty():
+            cycle_map = (
+                imp.with_columns(pl.col("t_start").dt.strftime("%Y-%m").alias("month"))
+                .group_by("month")
+                .agg(pl.col("_cycle_bak").first().alias("cycle"))
+            )
+            tb = tb.join(cycle_map, on="month", how="left")
+        if not tb.is_empty() and "cycle" in tb.columns:
+            band_cols = [c for c in tb.columns if c not in ("month", "cycle")]
+            tou = tb.group_by("cycle").agg([pl.col(c).sum() for c in band_cols])
+        else:
+            tou = pl.DataFrame({"cycle": dfx["cycle"].unique()})
 
     # ---- EXPORT ----
     export = (
-        dfx[dfx["flow"] == "grid_export_solar"]
-        .groupby("cycle", as_index=False)
-        .agg(export_kwh=("kwh", "sum"))
+        dfx.filter(pl.col("flow") == "grid_export_solar")
+        .group_by("cycle")
+        .agg(pl.col("kwh").sum().alias("export_kwh"))
     )
 
     # ---- DEMAND ----
     if plan.demand:
-        # Per-cycle demand: window filter + kW conversion + max groupby cycle
-        imp = cast(CanonFrame, dfx[dfx["flow"] == "grid_import"].copy())
+        imp_cf = dfx.filter(pl.col("flow") == "grid_import")
         demand = transform.aggregate(
-            imp,
+            imp_cf,
             freq=None,
             groupby=["cycle"],
             metric="kW",
@@ -127,46 +129,47 @@ def _cycle_billables(
             window_days=plan.demand.days,
         )
     else:
-        demand = pd.DataFrame({"cycle": tou["cycle"].unique(), "demand_kw": 0.0})
+        demand = pl.DataFrame({"cycle": tou["cycle"].unique(), "demand_kw": 0.0})
 
     # ---- CONTROLLED LOAD (optional) ----
+    controlled_load = None
     if include_controlled_load:
         controlled_load = (
-            dfx[dfx["flow"] == "controlled_load_import"]
-            .groupby("cycle", as_index=False)
-            .agg(controlled_load_kwh=("kwh", "sum"))
+            dfx.filter(pl.col("flow") == "controlled_load_import")
+            .group_by("cycle")
+            .agg(pl.col("kwh").sum().alias("controlled_load_kwh"))
         )
-    else:
-        controlled_load = None
 
     # ---- TOTAL IMPORT (optional) ----
+    total_import = None
     if include_total_import:
         total_import = (
-            dfx[dfx["flow"].str.contains("import")]
-            .groupby("cycle", as_index=False)
-            .agg(total_import_kwh=("kwh", "sum"))
+            dfx.filter(pl.col("flow").str.contains("import"))
+            .group_by("cycle")
+            .agg(pl.col("kwh").sum().alias("total_import_kwh"))
         )
-    else:
-        total_import = None
 
     # ---- MERGE ----
-    out = tou.merge(export, on="cycle", how="left").merge(demand, on="cycle", how="left")
+    out = tou.join(export, on="cycle", how="left").join(demand, on="cycle", how="left")
     if controlled_load is not None:
-        out = out.merge(controlled_load, on="cycle", how="left")
+        out = out.join(controlled_load, on="cycle", how="left")
     if total_import is not None:
-        out = out.merge(total_import, on="cycle", how="left")
+        out = out.join(total_import, on="cycle", how="left")
 
-    numeric_cols = out.select_dtypes(include="number").columns
-    out[numeric_cols] = out[numeric_cols].fillna(0.0)
+    # Fill numeric nulls
+    num_cols = [c for c in out.columns if out[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+    out = out.with_columns([pl.col(c).fill_null(0.0) for c in num_cols])
 
     # ---- EXACT DAY COUNTS ----
     def _days_from_label(lbl: str) -> int:
+        import datetime as _dt
         s_str, e_str = lbl.split("→")
-        s = pd.Timestamp(s_str)
-        e = pd.Timestamp(e_str)
-        return int(((e + pd.Timedelta(days=1)) - s).days)
+        s = _dt.date.fromisoformat(s_str)
+        e = _dt.date.fromisoformat(e_str)
+        return int((e - s).days) + 1
 
-    out["days_in_cycle"] = out["cycle"].astype(str).map(_days_from_label)
+    days_list = [_days_from_label(str(lbl)) for lbl in out["cycle"].to_list()]
+    out = out.with_columns(pl.Series(days_list, dtype=pl.Int32).alias("days_in_cycle"))
     return out
 
 
@@ -175,59 +178,56 @@ def compute_billables(
     plan: Plan,
     *,
     mode: Literal["monthly", "cycles"] = "monthly",
-    cycles: Optional[Iterable[Tuple[str | pd.Timestamp, str | pd.Timestamp]]] = None,
+    cycles: Optional[Iterable[Tuple[str | object, str | object]]] = None,
     include_controlled_load: bool = False,
     include_total_import: bool = False,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Compute billable quantities (TOU, demand, export) for a plan.
 
-    mode="monthly" returns one row per calendar month; mode="cycles" requires cycles= and
-    returns one row per billing cycle. Pass include_controlled_load or include_total_import
-    for optional extra columns.
+    mode='monthly': one row per calendar month.
+    mode='cycles': requires cycles= and returns one row per billing cycle.
     """
     if mode == "monthly":
         tou = transform.tou_bins(
-            df[df["flow"] == "grid_import"],
+            df.filter(pl.col("flow") == "grid_import"),
             bands=[b.__dict__ for b in plan.usage_bands],
         )
         export = (
-            df.loc[df["flow"] == "grid_export_solar", ["kwh"]]
-            .resample("1MS")
-            .sum()
-            .rename(columns={"kwh": "export_kwh"})
-            .reset_index()
+            df.filter(pl.col("flow") == "grid_export_solar")
+            .sort("t_start")
+            .group_by_dynamic("t_start", every="1mo")
+            .agg(pl.col("kwh").sum().alias("export_kwh"))
+            .with_columns(pl.col("t_start").dt.strftime("%Y-%m").alias("month"))
+            .select(["month", "export_kwh"])
         )
-        export["month"] = utils.month_label(export["t_start"])  # type: ignore[arg-type]
-        export = export[["month", "export_kwh"]]
 
-        # Base months from export or index range (fallback), else from tou
-        base = export[["month"]].drop_duplicates().copy()
-        if base.empty:
-            idx = pd.DatetimeIndex(df.index)
-            if len(idx):
-                rng = pd.date_range(
-                    idx.min().normalize(), idx.max().normalize(), freq="MS", tz=idx.tz
+        # Base months from export or index range
+        base = export.select("month").unique()
+        if base.is_empty():
+            ts = df["t_start"]
+            if len(ts):
+                min_ts = ts.min()
+                max_ts = ts.max()
+                month_range = pl.date_range(
+                    min_ts.replace(day=1).date(),
+                    max_ts.date(),
+                    interval="1mo",
+                    eager=True,
                 )
-                if len(rng):
-                    base = pd.DataFrame({"month": utils.month_label(rng).values})
-        if base.empty and not tou.empty:
-            base = tou[["month"]].drop_duplicates().copy()
-        if base.empty:
-            # No periods to report
-            cols = [
-                "month",
-                "export_kwh",
-                "demand_kw",
-                *[b.name for b in plan.usage_bands],
-            ]
-            return pd.DataFrame(columns=cols)
+                base = pl.DataFrame(
+                    {"month": month_range.dt.strftime("%Y-%m")}
+                )
+        if base.is_empty() and not tou.is_empty():
+            base = tou.select("month").unique()
+        if base.is_empty():
+            cols = ["month", "export_kwh", "demand_kw"] + [b.name for b in plan.usage_bands]
+            return pl.DataFrame({c: pl.Series([], dtype=pl.String if c == "month" else pl.Float64) for c in cols})
 
-        # Ensure ToU rows exist for all base months
-        if tou.empty:
-            tou = base.copy()
+        if tou.is_empty():
+            tou = base.clone()
             for b in plan.usage_bands:
-                tou[b.name] = 0.0
+                tou = tou.with_columns(pl.lit(0.0).alias(b.name))
 
         # Demand
         if plan.demand:
@@ -242,159 +242,153 @@ def compute_billables(
                 window_end=plan.demand.window_end,
                 window_days=plan.demand.days,  # type: ignore[arg-type]
             )
-            demand = demand.copy()
-            demand["month"] = utils.month_label(pd.DatetimeIndex(demand.index))
-            demand = demand[["month", "demand_kw"]].reset_index(drop=True)
+            demand = demand.with_columns(
+                pl.col("t_start").dt.strftime("%Y-%m").alias("month")
+            ).select(["month", "demand_kw"])
         else:
-            demand = base.copy()
-            demand["demand_kw"] = 0.0
+            demand = base.with_columns(pl.lit(0.0).alias("demand_kw"))
 
-        # ---- CONTROLLED LOAD (optional) ----
+        # Optional controlled load
+        controlled_load = None
         if include_controlled_load:
             controlled_load = (
-                df.loc[df["flow"] == "controlled_load_import", ["kwh"]]
-                .resample("1MS")
-                .sum()
-                .rename(columns={"kwh": "controlled_load_kwh"})
-                .reset_index()
+                df.filter(pl.col("flow") == "controlled_load_import")
+                .sort("t_start")
+                .group_by_dynamic("t_start", every="1mo")
+                .agg(pl.col("kwh").sum().alias("controlled_load_kwh"))
+                .with_columns(pl.col("t_start").dt.strftime("%Y-%m").alias("month"))
+                .select(["month", "controlled_load_kwh"])
             )
-            controlled_load["month"] = utils.month_label(controlled_load["t_start"])  # type: ignore[arg-type]
-            controlled_load = controlled_load[["month", "controlled_load_kwh"]]
-        else:
-            controlled_load = None
 
-        # ---- TOTAL IMPORT (optional) ----
+        # Optional total import
+        total_import = None
         if include_total_import:
             total_import = (
-                df.loc[df["flow"].str.contains("import"), ["kwh"]]
-                .resample("1MS")
-                .sum()
-                .rename(columns={"kwh": "total_import_kwh"})
-                .reset_index()
+                df.filter(pl.col("flow").str.contains("import"))
+                .sort("t_start")
+                .group_by_dynamic("t_start", every="1mo")
+                .agg(pl.col("kwh").sum().alias("total_import_kwh"))
+                .with_columns(pl.col("t_start").dt.strftime("%Y-%m").alias("month"))
+                .select(["month", "total_import_kwh"])
             )
-            total_import["month"] = utils.month_label(total_import["t_start"])  # type: ignore[arg-type]
-            total_import = total_import[["month", "total_import_kwh"]]
-        else:
-            total_import = None
 
         out = (
-            base.merge(tou, on="month", how="left")
-            .merge(export, on="month", how="left")
-            .merge(demand, on="month", how="left")
+            base.join(tou, on="month", how="left")
+            .join(export, on="month", how="left")
+            .join(demand, on="month", how="left")
         )
         if controlled_load is not None:
-            out = out.merge(controlled_load, on="month", how="left")
+            out = out.join(controlled_load, on="month", how="left")
         if total_import is not None:
-            out = out.merge(total_import, on="month", how="left")
+            out = out.join(total_import, on="month", how="left")
 
-        numeric_cols = out.select_dtypes(include="number").columns
-        out[numeric_cols] = out[numeric_cols].fillna(0.0)
-        return out
+        num_cols = [c for c in out.columns if out[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+        return out.with_columns([pl.col(c).fill_null(0.0) for c in num_cols])
 
     # cycles mode
     if not cycles:
         raise ValueError("cycles must be provided when mode='cycles'")
     return _cycle_billables(
-        df,
-        plan,
-        cycles,
+        df, plan, cycles,
         include_controlled_load=include_controlled_load,
         include_total_import=include_total_import,
     )
 
 
 def estimate_costs(
-    bill: pd.DataFrame,
+    bill: pl.DataFrame,
     plan: Plan,
     *,
     pay_on_time_discount: float = 0.0,
     include_gst: bool = False,
     gst_rate: float = 0.10,
-) -> pd.DataFrame:
-    """
-    Estimate costs from billables (monthly or cycles).
-    Detects period type by presence of 'month' or 'cycle'.
-    """
-    # Energy across ToU band columns
-    energy = 0.0
+) -> pl.DataFrame:
+    """Estimate costs from billables (monthly or cycles)."""
+    out = bill.clone()
+
+    # Energy across TOU band columns
+    energy = pl.lit(0.0)
     for b in plan.usage_bands:
-        energy = energy + bill.get(b.name, 0.0) * (b.rate_c_per_kwh / 100.0)
-    out = bill.copy()
-    out["energy_cost"] = energy
+        if b.name in out.columns:
+            energy = energy + pl.col(b.name) * (b.rate_c_per_kwh / 100.0)
+    out = out.with_columns(energy.alias("energy_cost"))
 
     # Demand cost
-    out["demand_cost"] = (
-        out.get("demand_kw", 0.0) * plan.demand.rate_per_kw_per_month if plan.demand else 0.0
-    )
+    if plan.demand and "demand_kw" in out.columns:
+        out = out.with_columns(
+            (pl.col("demand_kw") * plan.demand.rate_per_kw_per_month).alias("demand_cost")
+        )
+    else:
+        out = out.with_columns(pl.lit(0.0).alias("demand_cost"))
 
-    # Fixed cost
+    # Fixed cost (days in period)
     if "cycle" in out.columns:
         if "days_in_cycle" not in out.columns:
-            # compute from label if missing
             def _days_from_label(lbl: str) -> int:
+                import datetime as _dt
                 s_str, e_str = lbl.split("→")
-                s = pd.Timestamp(s_str)
-                e = pd.Timestamp(e_str)
-                return int(((e + pd.Timedelta(days=1)) - s).days)
-
-            out["days_in_cycle"] = out["cycle"].astype(str).map(_days_from_label)
-        # Ensure days is numeric (map may produce object dtype)
-        days = pd.to_numeric(out["days_in_cycle"], errors="coerce").fillna(0.0)
+                s = _dt.date.fromisoformat(s_str)
+                e = _dt.date.fromisoformat(e_str)
+                return int((e - s).days) + 1
+            days_list = [_days_from_label(str(lbl)) for lbl in out["cycle"].to_list()]
+            out = out.with_columns(pl.Series(days_list, dtype=pl.Float64).alias("days_in_cycle"))
+        days_expr = pl.col("days_in_cycle").cast(pl.Float64).fill_null(0.0)
     elif "month" in out.columns:
-        _p = pd.PeriodIndex(out["month"], freq="M")
-        # PeriodIndex.days_in_month returns an Index, so convert to Series before to_numeric
-        days = pd.Series(_p.days_in_month)
-        days = pd.to_numeric(days, errors="coerce").fillna(0.0)
+        out = out.with_columns(
+            pl.col("month")
+            .str.strptime(pl.Date, "%Y-%m")
+            .dt.month_end()
+            .dt.day()
+            .cast(pl.Float64)
+            .alias("_days_in_month")
+        )
+        days_expr = pl.col("_days_in_month")
     else:
         raise ValueError("bill must contain 'month' or 'cycle' column")
-    out["fixed_cost"] = (plan.fixed_c_per_day / 100.0) * days
+
+    out = out.with_columns(
+        (pl.lit(plan.fixed_c_per_day / 100.0) * days_expr).alias("fixed_cost")
+    )
+    if "_days_in_month" in out.columns:
+        out = out.drop("_days_in_month")
 
     for col in ("export_kwh", "energy_cost", "demand_cost", "fixed_cost"):
-        if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
-        else:
-            out[col] = 0.0
-
-    # Feed-in credit (negative)
-    out["feed_in_credit"] = out["export_kwh"] * (plan.feed_in_c_per_kwh / 100.0) * (-1.0)
-
-    out["subtotal"] = out[["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]].sum(
-        axis=1
+        if col not in out.columns:
+            out = out.with_columns(pl.lit(0.0).alias(col))
+    out = out.with_columns(
+        [pl.col(c).fill_null(0.0).cast(pl.Float64) for c in ("export_kwh", "energy_cost", "demand_cost", "fixed_cost")]
     )
 
-    charges_only = (out["energy_cost"] + out["demand_cost"] + out["fixed_cost"]).round(2)
-    out["pay_on_time_discount"] = -(charges_only * float(pay_on_time_discount)).round(2)
+    # Feed-in credit (negative)
+    out = out.with_columns(
+        (pl.col("export_kwh") * (plan.feed_in_c_per_kwh / 100.0) * -1.0).alias("feed_in_credit")
+    )
+
+    out = out.with_columns(
+        (pl.col("energy_cost") + pl.col("demand_cost") + pl.col("fixed_cost") + pl.col("feed_in_credit")).alias("subtotal")
+    )
+
+    charges_only = (pl.col("energy_cost") + pl.col("demand_cost") + pl.col("fixed_cost")).round(2)
+    out = out.with_columns(
+        (-(charges_only * float(pay_on_time_discount)).round(2)).alias("pay_on_time_discount")
+    )
 
     if include_gst:
-        gst_base = (charges_only + out["pay_on_time_discount"]).clip(lower=0.0)
-        out["gst"] = (gst_base * float(gst_rate)).round(2)
+        out = out.with_columns(
+            ((charges_only + pl.col("pay_on_time_discount")).clip(lower_bound=0.0) * float(gst_rate)).round(2).alias("gst")
+        )
     else:
-        out["gst"] = 0.0
+        out = out.with_columns(pl.lit(0.0).alias("gst"))
 
-    out["total"] = out["subtotal"] + out["pay_on_time_discount"] + out["gst"]
+    out = out.with_columns(
+        (pl.col("subtotal") + pl.col("pay_on_time_discount") + pl.col("gst")).alias("total")
+    )
 
-    # Order columns: period id first, then costs
+    # Order columns
     if "month" in out.columns:
-        cols = [
-            "month",
-            "energy_cost",
-            "demand_cost",
-            "fixed_cost",
-            "feed_in_credit",
-            "pay_on_time_discount",
-            "gst",
-            "total",
-        ]
+        keep = ["month", "energy_cost", "demand_cost", "fixed_cost", "feed_in_credit",
+                "pay_on_time_discount", "gst", "total"]
     else:
-        cols = [
-            "cycle",
-            "days_in_cycle",
-            "energy_cost",
-            "demand_cost",
-            "fixed_cost",
-            "feed_in_credit",
-            "pay_on_time_discount",
-            "gst",
-            "total",
-        ]
-    return out[cols]
+        keep = ["cycle", "days_in_cycle", "energy_cost", "demand_cost", "fixed_cost",
+                "feed_in_credit", "pay_on_time_discount", "gst", "total"]
+    return out.select([c for c in keep if c in out.columns])

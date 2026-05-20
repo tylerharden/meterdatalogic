@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TypedDict, Literal, Optional, List, Dict
 from dataclasses import dataclass
 
-import pandas as pd
+import polars as pl
 from pydantic import BaseModel
 from ..core.types import CanonFrame
 
@@ -185,7 +185,7 @@ class ScenarioResult:
     df_after: CanonFrame
     summary_before: SummaryPayload
     summary_after: SummaryPayload
-    cost_before: Optional[pd.DataFrame]
-    cost_after: Optional[pd.DataFrame]
+    cost_before: Optional[pl.DataFrame]
+    cost_after: Optional[pl.DataFrame]
     delta: ScenarioDelta
     explain: ScenarioExplain

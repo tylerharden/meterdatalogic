@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
-import pandas as pd
+import polars as pl
 
 from .types import Insight, InsightContext
 from .config import InsightConfig
@@ -10,13 +10,13 @@ from ..types import ScenarioResult
 from ...core import transform, utils
 
 
-def _annual_total_cost(d: Optional[pd.DataFrame]) -> float:
-    if d is None or d.empty:
+def _annual_total_cost(d: Optional[pl.DataFrame]) -> float:
+    if d is None or d.is_empty():
         return 0.0
     if "total" in d.columns:
-        return float(pd.to_numeric(d["total"], errors="coerce").fillna(0.0).sum())
-    # fallback: sum all numeric columns
-    return float(d.select_dtypes("number").sum(axis=1).sum())
+        return float(d["total"].fill_null(0.0).sum())
+    num_cols = [c for c in d.columns if d[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+    return float(sum(d[c].sum() for c in num_cols))
 
 
 def ev_impact(
@@ -28,17 +28,15 @@ def ev_impact(
     if "ev" not in sc_map:
         return None
     sc: ScenarioResult = sc_map["ev"]
-    # Annual energy delta
+
     before_kwh = float(sc.summary_before.get("stats", {}).get("total_import_kwh", 0.0))
     after_kwh = float(sc.summary_after.get("stats", {}).get("total_import_kwh", 0.0))
     delta_kwh = after_kwh - before_kwh
-    # Annual bill delta if available
     cost_before = _annual_total_cost(sc.cost_before)
     cost_after = _annual_total_cost(sc.cost_after)
     cost_delta = cost_after - cost_before
 
-    # Rough attribution of charging time: compare peak-window import share before/after
-    def _peak_share(dfx: pd.DataFrame) -> float:
+    def _peak_share(dfx: CanonFrame) -> float:
         prof = transform.profile(dfx, by="slot", reducer="mean", include_import_total=True)
         total_daily_kwh = utils.daily_total_from_profile(prof)
         windows = [
@@ -49,10 +47,7 @@ def ev_impact(
             }
         ]
         stats = transform.window_stats_from_profile(
-            prof,
-            windows,
-            utils.infer_cadence_minutes(pd.DatetimeIndex(dfx.index)),
-            total_daily_kwh,
+            prof, windows, utils.infer_cadence_minutes(dfx["t_start"]), total_daily_kwh,
         )
         return float(stats.get("peak", {}).get("share_of_daily_pct", 0.0))
 
@@ -61,21 +56,15 @@ def ev_impact(
     charging_in_peak = peak_share_after > peak_share_before
 
     direction = "increase" if cost_delta > 0 else "decrease"
-    title = "EV charging impact"
-    msg = (
-        f"EV charging adds ~{delta_kwh:,.0f} kWh/yr and a {direction} in annual bill of ${abs(cost_delta):,.0f}. "
-        + (
-            "Charging appears concentrated in peak hours."
-            if charging_in_peak
-            else "Charging appears mostly off-peak."
-        )
-    )
     return Insight(
         id="ev_impact",
         level="advanced",
         category="scenario",
-        title=title,
-        message=msg,
+        title="EV charging impact",
+        message=(
+            f"EV charging adds ~{delta_kwh:,.0f} kWh/yr and a {direction} in annual bill of ${abs(cost_delta):,.0f}. "
+            + ("Charging appears concentrated in peak hours." if charging_in_peak else "Charging appears mostly off-peak.")
+        ),
         severity="notice",  # type: ignore[arg-type]
         metrics={
             "delta_kwh_year": float(delta_kwh),
@@ -96,25 +85,18 @@ def battery_impact(
         return None
     sc: ScenarioResult = sc_map["battery"]
 
-    def _window_kwh(dfx: pd.DataFrame) -> float:
+    def _window_kwh(dfx: CanonFrame) -> float:
         prof = transform.profile(dfx, by="slot", reducer="mean", include_import_total=True)
         stats = transform.window_stats_from_profile(
             prof,
-            [
-                {
-                    "key": "win",
-                    "start": config.advanced.battery_window_start,
-                    "end": config.advanced.battery_window_end,
-                }
-            ],
-            utils.infer_cadence_minutes(pd.DatetimeIndex(dfx.index)),
+            [{"key": "win", "start": config.advanced.battery_window_start, "end": config.advanced.battery_window_end}],
+            utils.infer_cadence_minutes(dfx["t_start"]),
         )
         return float(stats.get("win", {}).get("kwh_per_day", 0.0))
 
     before_win = _window_kwh(sc.df_before)
     after_win = _window_kwh(sc.df_after)
     reduction = before_win - after_win
-
     cost_before = _annual_total_cost(sc.cost_before)
     cost_after = _annual_total_cost(sc.cost_after)
     cost_delta = cost_after - cost_before
@@ -124,9 +106,7 @@ def battery_impact(
         level="advanced",
         category="scenario",
         title="Battery reduces evening grid import",
-        message=(
-            f"Battery cuts average evening import by ~{reduction:.1f} kWh/day and changes annual bill by ${-cost_delta:,.0f}."
-        ),
+        message=f"Battery cuts average evening import by ~{reduction:.1f} kWh/day and changes annual bill by ${-cost_delta:,.0f}.",
         severity="notice",  # type: ignore[arg-type]
         metrics={
             "evening_import_before_kwh_per_day": before_win,
@@ -140,9 +120,8 @@ def battery_impact(
 def load_shifting_opportunities(
     df: CanonFrame, *, config: InsightConfig, context: Optional[InsightContext] = None
 ) -> Optional[Insight]:
-    if df.empty:
+    if df.is_empty():
         return None
-    # Heuristic: high evening share and low daytime share suggests shifting potential
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
     total_daily_kwh = utils.daily_total_from_profile(prof)
     windows = [
@@ -150,10 +129,7 @@ def load_shifting_opportunities(
         {"key": "daytime", "start": "09:00", "end": "16:00"},
     ]
     stats = transform.window_stats_from_profile(
-        prof,
-        windows,
-        utils.infer_cadence_minutes(pd.DatetimeIndex(df.index)),
-        total_daily_kwh,
+        prof, windows, utils.infer_cadence_minutes(df["t_start"]), total_daily_kwh
     )
     evening = float(stats.get("evening", {}).get("share_of_daily_pct", 0.0))
     daytime = float(stats.get("daytime", {}).get("share_of_daily_pct", 0.0))
@@ -176,31 +152,39 @@ def load_shifting_opportunities(
 def step_change_baseload(
     df: CanonFrame, *, config: InsightConfig, context: Optional[InsightContext] = None
 ) -> Optional[Insight]:
-    if df.empty:
+    if df.is_empty():
         return None
-    idx = pd.DatetimeIndex(df.index)
-    days = (idx.max().normalize() - idx.min().normalize()).days + 1 if len(idx) else 0
-    if days < config.advanced.min_days_for_step_check:
+    ts = df["t_start"]
+    if len(ts) == 0:
         return None
-    # Use transform.aggregate to apply the overnight window and daily sum in one call.
+    days_total = int((ts.max() - ts.min()).days) + 1
+    if days_total < config.advanced.min_days_for_step_check:
+        return None
+
     daily_df = transform.aggregate(
         df,
         freq="1D",
         agg="sum",
         window_start=config.advanced.overnight_start,
         window_end=config.advanced.overnight_end,
-    ).dropna()
+    )
+    col = "kwh" if "kwh" in daily_df.columns else ([c for c in daily_df.columns if c != "t_start"] or [None])[0]
+    if col is None or daily_df.is_empty():
+        return None
+    daily_df = daily_df.drop_nulls(subset=[col])
     if len(daily_df) < config.advanced.min_days_for_step_check:
         return None
-    daily = daily_df["kwh"]
-    mid = len(daily) // 2
-    before = float(daily.iloc[:mid].mean()) if mid > 0 else 0.0
-    after = float(daily.iloc[mid:].mean()) if mid < len(daily) else 0.0
-    bigger = max(before, after)
-    smaller = min(before, after)
+
+    vals = daily_df[col].cast(pl.Float64).to_numpy()
+    mid = len(vals) // 2
+    before = float(vals[:mid].mean()) if mid > 0 else 0.0
+    after_val = float(vals[mid:].mean()) if mid < len(vals) else 0.0
+    bigger = max(before, after_val)
+    smaller = min(before, after_val)
     change_pct = ((bigger - smaller) / bigger * 100.0) if bigger > 0 else 0.0
+
     if change_pct >= config.advanced.step_change_pct_threshold:
-        direction = "increase" if after > before else "decrease"
+        direction = "increase" if after_val > before else "decrease"
         return Insight(
             id="step_change_baseload",
             level="advanced",
@@ -214,7 +198,7 @@ def step_change_baseload(
             metrics={
                 "change_pct": change_pct,
                 "before_kwh_per_night": before,
-                "after_kwh_per_night": after,
+                "after_kwh_per_night": after_val,
             },
         )
     return None

@@ -1,36 +1,36 @@
 from __future__ import annotations
 import numpy as np
-import pandas as pd
-from zoneinfo import ZoneInfo
+import polars as pl
 from datetime import time as _time
 from typing import Literal
 
 from . import canon
-from typing import cast
 from .types import CanonFrame
 
 
-def ensure_tz_aware_index(df: pd.DataFrame, tz: str) -> pd.DataFrame:
-    if df.index.name != canon.INDEX_NAME:
-        raise ValueError(f"Index must be '{canon.INDEX_NAME}', got {df.index.name}")
-    idx = pd.DatetimeIndex(df.index)
-    if idx.tz is None:
-        df = df.tz_localize(ZoneInfo(tz))
-    else:
-        df = df.tz_convert(ZoneInfo(tz))
-    return df
+# ---------------------------------------------------------------------------
+# Timezone helpers
+# ---------------------------------------------------------------------------
+
+def ensure_tz_aware(t_start: pl.Series, tz: str) -> pl.Series:
+    """Return a tz-aware Datetime Series, localising or converting as needed."""
+    if t_start.dtype.time_zone is None:
+        return t_start.dt.replace_time_zone(tz)
+    return t_start.dt.convert_time_zone(tz)
 
 
-def infer_cadence_minutes(idx: pd.DatetimeIndex, default: int = canon.DEFAULT_CADENCE_MIN) -> int:
-    """
-    Infer cadence in minutes from a DatetimeIndex, ignoring duplicate timestamps.
-    """
-    ts = pd.DatetimeIndex(idx).sort_values().unique()
+# ---------------------------------------------------------------------------
+# Cadence inference
+# ---------------------------------------------------------------------------
+
+def infer_cadence_minutes(t_start: pl.Series, default: int = canon.DEFAULT_CADENCE_MIN) -> int:
+    """Infer cadence in minutes from a Datetime Series, ignoring duplicates."""
+    ts = t_start.unique().sort()
     if len(ts) < 2:
         return int(default)
 
-    diffs = ts[1:] - ts[:-1]
-    diffs_min = (diffs / np.timedelta64(1, "s")).to_numpy(dtype=float) / 60.0
+    diffs = ts.diff().drop_nulls()  # Duration series
+    diffs_min = np.array((diffs.dt.total_seconds() / 60.0).to_list(), dtype=float)
     diffs_min = diffs_min[diffs_min > 0]
     if len(diffs_min) == 0:
         return int(default)
@@ -40,143 +40,139 @@ def infer_cadence_minutes(idx: pd.DatetimeIndex, default: int = canon.DEFAULT_CA
     return int(vals[np.argmax(counts)])
 
 
-def interval_hours_from_index(idx: pd.DatetimeIndex) -> float:
-    cmin = infer_cadence_minutes(idx, default=canon.DEFAULT_CADENCE_MIN)
-    return cmin / 60.0
+def interval_hours(df: CanonFrame) -> float:
+    return infer_cadence_minutes(df["t_start"]) / 60.0
 
 
-def interval_hours(df: pd.DataFrame) -> float:
-    return interval_hours_from_index(pd.DatetimeIndex(df.index))
-
-
-def safe_localize_series(ts: pd.Series, tz: str) -> pd.Series:
-    s = pd.to_datetime(ts, errors="coerce")
-    if getattr(s.dt, "tz", None) is None:
-        return s.dt.tz_localize(ZoneInfo(tz))
-    return s.dt.tz_convert(ZoneInfo(tz))
-
+# ---------------------------------------------------------------------------
+# Time-of-day helpers
+# ---------------------------------------------------------------------------
 
 def parse_time_str(tstr: str) -> _time:
     """Parse an HH:MM time string. '24:00' is treated as midnight (00:00)."""
     s = tstr.strip()
     if s == "24:00":
         return _time(0, 0)
-    return pd.to_datetime(s, format="%H:%M").time()
+    h, m = s.split(":")
+    return _time(int(h), int(m))
 
 
-def time_in_range(times: pd.Series, start: _time, end: _time) -> pd.Series:
-    """Return mask for times within [start, end). Handles wrap-around."""
-    if start < end:
-        return (times >= start) & (times < end)
-    else:
-        # e.g. 21:00 → 05:00 next day
-        return (times >= start) | (times < end)
+def _seconds_since_midnight(t_start: pl.Series) -> pl.Series:
+    """Seconds since local midnight for each timestamp."""
+    h = t_start.dt.hour().cast(pl.Int64)
+    m = t_start.dt.minute().cast(pl.Int64)
+    s = t_start.dt.second().cast(pl.Int64)
+    return h * 3600 + m * 60 + s
 
 
-def local_time_series(idx: pd.DatetimeIndex) -> pd.Series:
-    """Return a Series of local wall-clock times (datetime.time) from a tz-aware index."""
-    if idx.tz is None:
-        raise ValueError("Index must be tz-aware for local_time_series.")
-    # local already; just use .time
-    return pd.Series(idx.time, index=idx)
+def time_in_range(t_start: pl.Series, start: _time, end: _time) -> pl.Series:
+    """Boolean mask: timestamps whose local wall-clock time is in [start, end)."""
+    t_s = _seconds_since_midnight(t_start)
+    start_s = start.hour * 3600 + start.minute * 60 + start.second
+    end_s = end.hour * 3600 + end.minute * 60 + end.second
+    if start_s < end_s:
+        return (t_s >= start_s) & (t_s < end_s)
+    # Wrap-around (e.g. 21:00 → 05:00)
+    return (t_s >= start_s) | (t_s < end_s)
 
 
-def day_mask(
-    idx: pd.DatetimeIndex,
-    days: Literal["ALL", "MF", "MS"] = "ALL",
-) -> np.ndarray:
-    """Boolean mask for timestamps on selected days. 'ALL', 'MF' (Mon-Fri), 'MS' (Mon-Sat)."""
+def day_mask(t_start: pl.Series, days: Literal["ALL", "MF", "MS"] = "ALL") -> pl.Series:
+    """Boolean mask for timestamps on selected days. Polars ISO weekday: Mon=1 … Sun=7."""
     if days == "ALL":
-        return np.ones(len(idx), dtype=bool)
-
-    dow = np.asarray(idx.dayofweek)  # Mon=0..Sun=6
+        return pl.Series([True] * len(t_start), dtype=pl.Boolean)
+    dow = t_start.dt.weekday().to_numpy()
     if days == "MF":
-        return dow <= 4
+        return pl.Series(dow <= 5)   # Mon=1 … Fri=5
     if days == "MS":
-        return dow <= 5
-    # Fallback: treat as ALL
-    return np.ones(len(idx), dtype=bool)
+        return pl.Series(dow <= 6)   # Mon=1 … Sat=6
+    return pl.Series([True] * len(t_start), dtype=pl.Boolean)
 
 
-def month_label(ts: pd.Series | pd.DatetimeIndex, tz: str | None = None) -> pd.Series:
-    """Return YYYY-MM month labels from a datetime-like Series/Index."""
-    if isinstance(ts, pd.DatetimeIndex):
-        idx = ts
-        if tz and idx.tz is not None:
-            idx = idx.tz_convert(tz)
-        return pd.Series(idx.strftime("%Y-%m"), index=idx)
-    else:
-        s = ts
-        if tz:
-            try:
-                if s.dt.tz is not None:
-                    s = s.dt.tz_convert(tz)
-            except AttributeError:
-                pass
-        return s.dt.strftime("%Y-%m")
+# ---------------------------------------------------------------------------
+# Label helpers
+# ---------------------------------------------------------------------------
+
+def month_label(ts: pl.Series, tz: str | None = None) -> pl.Series:
+    """Return YYYY-MM month labels from a tz-aware Datetime Series."""
+    s = ts
+    if tz:
+        if s.dtype.time_zone is not None:
+            s = s.dt.convert_time_zone(tz)
+        else:
+            s = s.dt.replace_time_zone(tz)
+    return s.dt.strftime("%Y-%m")
 
 
-def format_period_label(ts: pd.Series | pd.DatetimeIndex, freq: str) -> pd.Series | np.ndarray:
-    """Format timestamps as YYYY-MM-DD (freq='1D') or YYYY-MM (monthly) strings."""
-    idx = pd.DatetimeIndex(ts) if not isinstance(ts, pd.DatetimeIndex) else ts
-    if freq == "1D":
-        return idx.strftime("%Y-%m-%d")
-    else:  # Monthly
-        result = month_label(idx)
-        # Return values to avoid index alignment issues
-        return result.values if isinstance(result, pd.Series) else result
+def format_period_label(ts: pl.Series, freq: str) -> pl.Series:
+    """Format timestamps as YYYY-MM-DD (freq='1D') or YYYY-MM strings."""
+    fmt = "%Y-%m-%d" if freq == "1D" else "%Y-%m"
+    return ts.dt.strftime(fmt)
 
 
-def compute_flow_totals(df: pd.DataFrame) -> dict[str, float]:
+# ---------------------------------------------------------------------------
+# Flow / kWh aggregation helpers
+# ---------------------------------------------------------------------------
+
+def compute_flow_totals(df: CanonFrame) -> dict[str, float]:
     """Total kWh by flow name from a canonical DataFrame."""
-    if df.empty or "flow" not in df.columns or "kwh" not in df.columns:
+    if df.is_empty() or "flow" not in df.columns or "kwh" not in df.columns:
         return {}
-    return df.groupby("flow")["kwh"].sum().to_dict()
+    result = df.group_by("flow").agg(pl.col("kwh").sum())
+    return dict(zip(result["flow"].to_list(), result["kwh"].to_list()))
 
 
 def total_import_export(flow_totals: dict[str, float]) -> tuple[float, float]:
-    """Sum all import flows and all export flows. Returns (total_import_kwh, total_export_kwh)."""
-    import_flows = [k for k in flow_totals.keys() if "import" in k]
-    export_flows = [k for k in flow_totals.keys() if "export" in k]
+    """Sum all import flows and all export flows. Returns (total_import, total_export)."""
+    import_flows = [k for k in flow_totals if "import" in k]
+    export_flows = [k for k in flow_totals if "export" in k]
+    return (
+        float(sum(flow_totals.get(k, 0.0) for k in import_flows)),
+        float(sum(flow_totals.get(k, 0.0) for k in export_flows)),
+    )
 
-    total_import = float(sum(flow_totals.get(k, 0.0) for k in import_flows))
-    total_export = float(sum(flow_totals.get(k, 0.0) for k in export_flows))
 
-    return total_import, total_export
-
-
-def daily_total_from_profile(profile: pd.DataFrame) -> float:
-    """Sum the 'import_total' column from an average-day profile to get total daily kWh."""
-    if profile.empty or "import_total" not in profile.columns:
+def daily_total_from_profile(profile: CanonFrame) -> float:
+    """Sum the 'import_total' column from an average-day profile."""
+    if profile.is_empty() or "import_total" not in profile.columns:
         return 0.0
     return float(profile["import_total"].sum())
 
 
+# ---------------------------------------------------------------------------
+# Canon frame construction
+# ---------------------------------------------------------------------------
+
 def build_canon_frame(
-    idx: pd.DatetimeIndex,
-    kwh: np.ndarray | pd.Series,
+    t_start: pl.Series,
+    kwh: np.ndarray,
     *,
     nmi: str | None,
     channel: str,
     flow: str,
     cadence_min: int | None,
-) -> pd.DataFrame:
-    df = pd.DataFrame(
+) -> CanonFrame:
+    n = len(t_start)
+    return pl.DataFrame(
         {
-            "t_start": idx,
-            "nmi": nmi,
-            "channel": channel,
-            "flow": flow,
-            "kwh": np.asarray(kwh, dtype=float),
-            "cadence_min": cadence_min,
+            "t_start": t_start,
+            "nmi": pl.Series([nmi] * n, dtype=pl.String),
+            "channel": pl.Series([channel] * n, dtype=pl.String),
+            "flow": pl.Series([flow] * n, dtype=pl.String),
+            "kwh": pl.Series(np.asarray(kwh, dtype=float), dtype=pl.Float64),
+            "cadence_min": pl.Series([cadence_min] * n, dtype=pl.Int32),
         }
-    ).set_index("t_start")
-    return df.sort_index()
+    ).sort("t_start")
 
 
 def empty_canon_frame(tz: str = canon.DEFAULT_TZ) -> CanonFrame:
-    """Return an empty CanonFrame with a tz-aware index and required columns."""
-    idx = pd.DatetimeIndex([], tz=ZoneInfo(tz), name=canon.INDEX_NAME)
-    out = pd.DataFrame(columns=canon.REQUIRED_COLS, index=idx)
-    out.__class__ = CanonFrame
-    return cast(CanonFrame, out)
+    """Return an empty CanonFrame with the correct schema."""
+    return pl.DataFrame(
+        {
+            "t_start": pl.Series([], dtype=pl.Datetime("us", tz)),
+            "nmi": pl.Series([], dtype=pl.String),
+            "channel": pl.Series([], dtype=pl.String),
+            "flow": pl.Series([], dtype=pl.String),
+            "kwh": pl.Series([], dtype=pl.Float64),
+            "cadence_min": pl.Series([], dtype=pl.Int32),
+        }
+    )

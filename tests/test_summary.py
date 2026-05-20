@@ -1,10 +1,7 @@
-"""Tests for the summary module.
+"""Tests for the summary module."""
 
-Covers payload structure, energy arithmetic, window stats, solar tracking,
-period breakdowns, peaks, and the base/top-hours derived stats.
-"""
-
-import pandas as pd
+import datetime as _dt
+import polars as pl
 import pytest
 
 import meterdatalogic as ml
@@ -12,10 +9,24 @@ import meterdatalogic as ml
 TZ = "Australia/Brisbane"
 
 
-def _import_df(rng, kwh=0.5):
-    return pd.DataFrame(
-        {"t_start": rng, "nmi": "Q1234567890", "channel": "E1", "kwh": kwh}
-    ).set_index("t_start")
+def _ts_range(start: str, periods: int, freq_min: int) -> pl.Series:
+    base = _dt.datetime.fromisoformat(start)
+    times = [base + _dt.timedelta(minutes=freq_min * i) for i in range(periods)]
+    return pl.Series(times, dtype=pl.Datetime("us")).dt.replace_time_zone(TZ)
+
+
+def _import_df(ts: pl.Series, kwh=0.5) -> pl.DataFrame:
+    n = len(ts)
+    return pl.DataFrame(
+        {
+            "t_start": ts,
+            "nmi": pl.Series(["Q1234567890"] * n),
+            "channel": pl.Series(["E1"] * n),
+            "flow": pl.Series(["grid_import"] * n),
+            "kwh": pl.Series([float(kwh)] * n if not hasattr(kwh, "__len__") else list(kwh), dtype=pl.Float64),
+            "cadence_min": pl.Series([30] * n, dtype=pl.Int32),
+        }
+    )
 
 
 # ------------------------------------------------------------------
@@ -33,17 +44,17 @@ def test_summary_payload_structure(canon_df_mixed_flows):
 
 
 def test_summary_peak_with_duplicate_timestamps():
-    idx = pd.date_range("2025-01-01", periods=2, freq="30min", tz=TZ)
-    df = pd.DataFrame(
+    ts = _ts_range("2025-01-01T00:00:00", 2, 30)
+    df = pl.DataFrame(
         {
-            "t_start": [idx[0], idx[0], idx[1]],
-            "nmi": ["N1", "N1", "N1"],
-            "channel": ["E1", "B1", "E1"],
-            "flow": ["grid_import", "grid_export_solar", "grid_import"],
-            "kwh": [0.9, 0.7, 0.5],
-            "cadence_min": 30,
+            "t_start": pl.concat([ts.head(1), ts.head(1), ts.tail(1)]),
+            "nmi": pl.Series(["N1", "N1", "N1"]),
+            "channel": pl.Series(["E1", "B1", "E1"]),
+            "flow": pl.Series(["grid_import", "grid_export_solar", "grid_import"]),
+            "kwh": pl.Series([0.9, 0.7, 0.5], dtype=pl.Float64),
+            "cadence_min": pl.Series([30, 30, 30], dtype=pl.Int32),
         }
-    ).set_index("t_start")
+    )
     ml.validate.assert_canon(df)
     s = ml.summary.summarise(df)
     assert s["stats"]["peaks"]["max_interval_kwh"] == 0.9
@@ -83,20 +94,37 @@ def test_import_only_has_zero_solar_export(canon_df_one_nmi):
 
 
 def test_solar_export_tracked_separately_from_import():
-    """Solar customer: import and export totals are computed independently."""
-    rng = pd.date_range("2025-01-01", periods=48, freq="30min", tz=TZ)
-    night = [ts for ts in rng if not (8 <= ts.hour < 16)]  # 32 intervals
-    day = [ts for ts in rng if 8 <= ts.hour < 16]  # 16 intervals
-    imp = pd.DataFrame({"t_start": night, "nmi": "Q", "channel": "E1", "kwh": 0.5}).set_index(
-        "t_start"
-    )
-    exp = pd.DataFrame({"t_start": day, "nmi": "Q", "channel": "B1", "kwh": 0.4}).set_index(
-        "t_start"
-    )
-    df = ml.ingest.from_dataframe(pd.concat([imp, exp]))
+    all_ts = _ts_range("2025-01-01T00:00:00", 48, 30)
+    hours = all_ts.dt.hour().to_numpy()
+    night_mask = ~((hours >= 8) & (hours < 16))
+    day_mask = (hours >= 8) & (hours < 16)
+
+    night_ts = all_ts.filter(pl.Series(night_mask.tolist()))
+    day_ts = all_ts.filter(pl.Series(day_mask.tolist()))
+
+    n_night = len(night_ts)
+    n_day = len(day_ts)
+
+    imp = pl.DataFrame({
+        "t_start": night_ts,
+        "nmi": pl.Series(["Q"] * n_night),
+        "channel": pl.Series(["E1"] * n_night),
+        "flow": pl.Series(["grid_import"] * n_night),
+        "kwh": pl.Series([0.5] * n_night, dtype=pl.Float64),
+        "cadence_min": pl.Series([30] * n_night, dtype=pl.Int32),
+    })
+    exp = pl.DataFrame({
+        "t_start": day_ts,
+        "nmi": pl.Series(["Q"] * n_day),
+        "channel": pl.Series(["B1"] * n_day),
+        "flow": pl.Series(["grid_export_solar"] * n_day),
+        "kwh": pl.Series([0.4] * n_day, dtype=pl.Float64),
+        "cadence_min": pl.Series([30] * n_day, dtype=pl.Int32),
+    })
+    df = ml.ingest.from_dataframe(pl.concat([imp, exp]))
     stats = ml.summary.summarise(df)["stats"]
-    assert stats["total_import_kwh"] == pytest.approx(len(night) * 0.5)  # 16.0
-    assert stats["solar_export_kwh"] == pytest.approx(len(day) * 0.4)  # 6.4
+    assert stats["total_import_kwh"] == pytest.approx(n_night * 0.5)
+    assert stats["solar_export_kwh"] == pytest.approx(n_day * 0.4)
 
 
 # ------------------------------------------------------------------
@@ -105,7 +133,6 @@ def test_solar_export_tracked_separately_from_import():
 
 
 def test_window_shares_sum_to_100(canon_df_one_nmi):
-    """The four hardcoded time windows cover the full day → shares = 100%."""
     df = ml.ingest.from_dataframe(canon_df_one_nmi)
     windows = ml.summary.summarise(df)["stats"]["windows"]
     total = sum(w["share_of_daily_pct"] for w in windows.values())
@@ -113,7 +140,6 @@ def test_window_shares_sum_to_100(canon_df_one_nmi):
 
 
 def test_window_avg_kw_positive_for_nonzero_import(canon_df_one_nmi):
-    """All windows should have positive avg_kw when there is import throughout the day."""
     df = ml.ingest.from_dataframe(canon_df_one_nmi)
     windows = ml.summary.summarise(df)["stats"]["windows"]
     for key, w in windows.items():
@@ -135,11 +161,9 @@ def test_base_load_within_bounds(canon_df_one_nmi):
 
 
 def test_base_load_uniform_data_approx_load(canon_df_one_nmi):
-    """For completely uniform import, base ≈ average (min interval ≈ mean)."""
     df = ml.ingest.from_dataframe(canon_df_one_nmi)
     stats = ml.summary.summarise(df)["stats"]
     base_kwh = stats["base"]["base_kwh_per_day"]
-    # Uniform 0.5 kWh / interval → base_kwh should equal per_day_avg
     assert base_kwh == pytest.approx(stats["per_day_avg_kwh"])
 
 
@@ -182,9 +206,8 @@ def test_daily_breakdown_row_count(canon_df_one_nmi):
 
 
 def test_monthly_breakdown_spans_two_months():
-    """Data crossing a month boundary → 2 entries in months.total."""
-    rng = pd.date_range("2025-01-01", periods=48 * 59, freq="30min", tz=TZ)  # Jan+Feb 2025
-    df = ml.ingest.from_dataframe(_import_df(rng))
+    ts = _ts_range("2025-01-01T00:00:00", 48 * 59, 30)
+    df = _import_df(ts)
     months = ml.summary.summarise(df)["datasets"]["months"]["total"]
     assert len(months) == 2
     assert "month" in months[0]

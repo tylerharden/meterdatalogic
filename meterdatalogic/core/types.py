@@ -1,40 +1,14 @@
 from __future__ import annotations
 from typing import Literal
-import pandas as pd
+import polars as pl
 
 Flow = Literal["grid_import", "controlled_load_import", "grid_export_solar"]
 
-
-class CanonFrame(pd.DataFrame):
-    """
-    Strongly-typed canonical interval dataframe.
-
-    Expected:
-      - DatetimeIndex named 't_start', tz-aware
-      - Columns: ['nmi', 'channel', 'flow', 'kwh', 'cadence_min']
-    """
-
-    @property
-    def _constructor(self):
-        return CanonFrame
-
-    # Convenience typed accessors (optional, but handy)
-    @property
-    def nmi(self) -> pd.Series:
-        return self["nmi"]
-
-    @property
-    def channel(self) -> pd.Series:
-        return self["channel"]
-
-    @property  # either 'grid_import', 'controlled_load_import', 'grid_export_solar'
-    def flow(self) -> pd.Series:
-        return self["flow"]
-
-    @property
-    def kwh(self) -> pd.Series:
-        return self["kwh"]
-
-    @property
-    def cadence_min(self) -> pd.Series:
-        return self["cadence_min"]
+# CanonFrame is a pl.DataFrame with the schema defined in canon.CANON_SCHEMA:
+#   t_start  : Datetime (tz-aware)  — interval start, previously the index
+#   nmi      : String
+#   channel  : String
+#   flow     : String  (one of the Flow literals)
+#   kwh      : Float64 (non-negative)
+#   cadence_min : Int32
+CanonFrame = pl.DataFrame

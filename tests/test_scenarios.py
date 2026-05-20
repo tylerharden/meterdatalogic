@@ -1,22 +1,31 @@
 """Scenario tests for EV, PV, battery, and the run() orchestrator."""
 
+import datetime as _dt
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 
 from meterdatalogic import scenario, utils
 import meterdatalogic.types as mdtypes
 
+TZ = "Australia/Brisbane"
+
+
+def _ts_range(start: str, periods: int, freq_min: int) -> pl.Series:
+    base = _dt.datetime.fromisoformat(start)
+    times = [base + _dt.timedelta(minutes=freq_min * i) for i in range(periods)]
+    return pl.Series(times, dtype=pl.Datetime("us")).dt.replace_time_zone(TZ)
+
 
 @pytest.fixture
-def day_30min():
-    """One local day at 30‑min cadence (Brisbane, no DST)."""
-    return pd.date_range("2025-01-01", periods=48, freq="30min", tz="Australia/Brisbane")
+def day_30min() -> pl.Series:
+    """One local day at 30-min cadence (Brisbane, no DST)."""
+    return _ts_range("2025-01-01", 48, 30)
 
 
 @pytest.fixture
 def base_df(day_30min):
-    """Canonical-like baseline: 0.5 kWh import per interval, single NMI/channel."""
+    """Canonical baseline: 0.5 kWh import per interval, single NMI/channel."""
     return utils.build_canon_frame(
         day_30min,
         np.full(len(day_30min), 0.5),
@@ -27,18 +36,36 @@ def base_df(day_30min):
     )
 
 
+def _series_from_after(df_after: pl.DataFrame, idx: pl.Series, flow_name: str) -> np.ndarray:
+    """Rebuild a dense per-interval numpy array for a flow from sparse canonical rows."""
+    n = len(idx)
+    if df_after.is_empty():
+        return np.zeros(n, dtype=float)
+    subset = df_after.filter(pl.col("flow") == flow_name)
+    if subset.is_empty():
+        return np.zeros(n, dtype=float)
+    grouped = subset.group_by("t_start").agg(pl.col("kwh").sum())
+    full = (
+        pl.DataFrame({"t_start": idx})
+        .join(grouped, on="t_start", how="left")
+        .with_columns(pl.col("kwh").fill_null(0.0))
+    )
+    return full["kwh"].cast(pl.Float64).to_numpy()
+
+
+def _flow_to_array(df: pl.DataFrame, idx: pl.Series, flow: str) -> np.ndarray:
+    """Dense per-interval array for a flow, reindexed to idx with 0.0 fill."""
+    subset = df.filter(pl.col("flow") == flow).group_by("t_start").agg(pl.col("kwh").sum())
+    full = (
+        pl.DataFrame({"t_start": idx})
+        .join(subset, on="t_start", how="left")
+        .with_columns(pl.col("kwh").fill_null(0.0))
+    )
+    return full["kwh"].cast(pl.Float64).to_numpy()
+
+
 def test_apply_ev_immediate_window_and_limits(day_30min):
-    """Input:
-    - idx: one day, 30-min intervals, tz-aware.
-    - EVConfig: 8 kWh/day target, max 7 kW, window 18:00–22:00, ALL days, 'immediate'.
-    Exercise:
-    - Window masking and per-interval limit (kW × interval_h).
-    Expect:
-    - Series length == len(idx).
-    - Nonzeros only within 18:00–22:00 local.
-    - s.max() ≤ max_kw × 0.5 kWh.
-    - Sum ≈ daily_kwh within tolerance (if implemented).
-    """
+    """EV: length, window mask, per-interval cap, and daily total."""
     idx = day_30min
     cfg = mdtypes.EVConfig(
         daily_kwh=8.0,
@@ -53,30 +80,18 @@ def test_apply_ev_immediate_window_and_limits(day_30min):
     except NotImplementedError:
         pytest.xfail("_apply_ev not implemented")
 
-    assert isinstance(s, pd.Series) and len(s) == len(idx)
-    # Only inside [18:00,22:00)
-    times = pd.Series(idx.time, index=idx)
+    assert isinstance(s, np.ndarray) and len(s) == len(idx)
     in_win = utils.time_in_range(
-        times,
-        pd.Timestamp("2000-01-01 18:00").time(),
-        pd.Timestamp("2000-01-01 22:00").time(),
-    )
+        idx, utils.parse_time_str("18:00"), utils.parse_time_str("22:00")
+    ).to_numpy()
     assert (s[~in_win] == 0).all()
-    # Per-interval cap
     assert s.max() <= cfg.max_kw * 0.5 + 1e-9
-    # Total close to target (allow tolerance if discretization prevents exact match)
     assert abs(s.sum() - cfg.daily_kwh) <= 0.5
 
 
 def test_apply_ev_immediate_wraparound_window_starts_at_window_start():
-    """Regression: EV with a wrap-around window (18:00–07:00) must charge from
-    18:00, not from midnight.
-
-    Before the fix, positions were iterated in calendar order within each day,
-    so 00:00–06:30 slots were filled first and the chart showed a midnight spike.
-    """
-    # Two full days so each calendar day has both early-morning and evening slots.
-    idx = pd.date_range("2025-01-13", periods=2 * 48, freq="30min", tz="Australia/Brisbane")
+    """Regression: EV with a wrap-around window (18:00-07:00) must charge from 18:00."""
+    idx = _ts_range("2025-01-13", 2 * 48, 30)
     cfg = mdtypes.EVConfig(
         daily_kwh=7.0,
         max_kw=7.0,
@@ -87,57 +102,41 @@ def test_apply_ev_immediate_wraparound_window_starts_at_window_start():
     )
     s = scenario._apply_ev(idx, cfg, interval_h=0.5)
 
-    # Charging should only appear in the evening (18:00+), NOT at midnight.
-    midnight_slots = s.between_time("00:00", "06:59")
-    evening_slots = s.between_time("18:00", "23:59")
+    midnight_mask = utils.time_in_range(
+        idx, utils.parse_time_str("00:00"), utils.parse_time_str("07:00")
+    ).to_numpy()
+    evening_mask = utils.time_in_range(
+        idx, utils.parse_time_str("18:00"), utils.parse_time_str("00:00")
+    ).to_numpy()
 
-    assert midnight_slots.sum() < 1e-9, (
-        f"EV charged {midnight_slots.sum():.3f} kWh at midnight — "
+    assert s[midnight_mask].sum() < 1e-9, (
+        f"EV charged {s[midnight_mask].sum():.3f} kWh at midnight — "
         "window ordering bug: should start charging from 18:00, not 00:00"
     )
-    assert evening_slots.sum() > 0, "No EV charging found in evening window"
-    # 7 kW charger, 7 kWh/day at 0.5h intervals → fills in exactly 2 slots
+    assert s[evening_mask].sum() > 0, "No EV charging found in evening window"
     assert abs(s.sum() - 2 * 7.0) < 1e-6, f"Expected 14 kWh total for 2 days, got {s.sum()}"
 
 
 def test_apply_pv_basic_contract(day_30min):
-    """Input:
-    - idx: one day, 30-min intervals.
-    - PVConfig: reasonable system_kwp/inverter_kw/loss_fraction.
-    Exercise:
-    - Shape generation, loss/clipping, interval scaling.
-    Expect:
-    - Series length == len(idx), dtype float, non-negative.
-    - Zeros likely at night; no values exceed inverter_kw × interval_h.
-    """
+    """PV: length, dtype, non-negative, and inverter cap."""
     cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     try:
         s = scenario._apply_pv(day_30min, cfg, interval_h=0.5)
     except NotImplementedError:
         pytest.xfail("_apply_pv not implemented")
 
-    assert isinstance(s, pd.Series) and len(s) == len(day_30min)
+    assert isinstance(s, np.ndarray) and len(s) == len(day_30min)
     assert s.dtype.kind in "fc"
     assert (s >= -1e-12).all()
     assert s.max() <= cfg.inverter_kw * 0.5 + 1e-9
 
 
 def test_battery_self_consume_contract():
-    """Input:
-    - import_prebat: baseline net import after PV-to-load (nonnegative).
-    - pv_excess_prebat: PV leftover (candidate for charge/export).
-    - BatteryConfig: capacity/max_kw/efficiency, with SoC bounds.
-    Exercise:
-    - Dispatch loop constraints and bounds.
-    Expect:
-    - discharge, charge, soc arrays of same length.
-    - Non-negative values; per-interval charge/discharge ≤ max_kw × interval_h.
-    - 0 ≤ soc ≤ capacity_kwh.
-    """
+    """Battery dispatch loop: shape, non-negative, per-interval cap, and SoC bounds."""
     n = 48
     interval_h = 0.5
-    import_prebat = np.full(n, 0.6)  # kWh per interval
-    pv_excess_prebat = np.where(np.arange(n) % 6 == 0, 0.4, 0.0)  # some excess
+    import_prebat = np.full(n, 0.6)
+    pv_excess_prebat = np.where(np.arange(n) % 6 == 0, 0.4, 0.0)
     cfg = mdtypes.BatteryConfig(
         capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9, soc_min=0.1, soc_max=0.95
     )
@@ -157,15 +156,7 @@ def test_battery_self_consume_contract():
 
 
 def test_run_wires_components_and_prices(day_30min, monkeypatch):
-    """Input:
-    - df_before: import-only 0.5 kWh/slot via utils.build_canon_frame.
-    - Monkeypatched scenario._apply_ev/pv/battery to deterministic outputs.
-    - Plan provided; pricing.estimate_monthly_cost monkeypatched to stub.
-    Exercise:
-    - run() orchestration and cost calculation path.
-    Expect:
-    - result has df_before/df_after and cost frames; pricing gets called.
-    """
+    """run() orchestration: df_before/df_after and cost frames are populated."""
     df_before = utils.build_canon_frame(
         day_30min,
         np.full(len(day_30min), 0.5),
@@ -175,23 +166,23 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
         cadence_min=30,
     )
 
-    # Deterministic components
-    ev_series = pd.Series(0.0, index=day_30min)
-    ev_series.iloc[36:40] = 0.2
-    pv_series = pd.Series(0.0, index=day_30min)
-    pv_series.iloc[22:26] = 0.3
+    n = len(day_30min)
+    ev_arr = np.zeros(n)
+    ev_arr[36:40] = 0.2
+    pv_arr = np.zeros(n)
+    pv_arr[22:26] = 0.3
 
     def fake_ev(idx, cfg, interval_h):
-        return ev_series
+        return ev_arr
 
     def fake_pv(idx, cfg, interval_h):
-        return pv_series
+        return pv_arr
 
     def fake_batt(import_prebat, pv_excess_prebat, cfg, interval_h):
-        n = len(import_prebat)
-        dis = np.zeros(n)
-        ch = np.zeros(n)
-        soc = np.zeros(n)
+        n_ = len(import_prebat)
+        dis = np.zeros(n_)
+        ch = np.zeros(n_)
+        soc = np.zeros(n_)
         dis[30:32] = 0.1
         return dis, ch, soc
 
@@ -201,12 +192,16 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
 
     called = {"pricing": False}
 
-    def fake_price(d, plan):
-        called["pricing"] = True
-        return pd.DataFrame({"month": ["2025-01"], "total": [123.45]})
-
     def fake_price_accept_kwargs(d, plan, **kwargs):
-        return fake_price(d, plan)
+        called["pricing"] = True
+        return pl.DataFrame({
+            "month": ["2025-01"],
+            "energy_cost": [100.0],
+            "demand_cost": [0.0],
+            "fixed_cost": [23.45],
+            "feed_in_credit": [0.0],
+            "total": [123.45],
+        })
 
     monkeypatch.setattr(scenario.pricing, "estimate_costs", fake_price_accept_kwargs, raising=True)
 
@@ -238,70 +233,52 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
 
 @pytest.fixture
 def multi_flow_df(day_30min):
-    """Canonical df with both grid_import and grid_export_solar rows.
+    """Canonical df with both grid_import and grid_export_solar rows."""
+    hours = day_30min.dt.hour().to_numpy()
+    night_mask = ~((hours >= 8) & (hours < 16))
+    day_mask_arr = (hours >= 8) & (hours < 16)
 
-    Mirrors a real net-metered solar customer: import during non-solar hours,
-    export during daylight only (never simultaneously positive at the same slot).
-    The scenario engine must not duplicate values when building the after-series.
-    """
-    night_idx = pd.DatetimeIndex([ts for ts in day_30min if not (8 <= ts.hour < 16)])
+    night_ts = day_30min.filter(pl.Series(night_mask.tolist()))
+    day_ts = day_30min.filter(pl.Series(day_mask_arr.tolist()))
+
     import_frame = utils.build_canon_frame(
-        night_idx,
-        np.full(len(night_idx), 0.5),
+        night_ts,
+        np.full(len(night_ts), 0.5),
         nmi="Q123",
         channel="E1",
         flow="grid_import",
         cadence_min=30,
     )
-    daylight_idx = pd.DatetimeIndex([ts for ts in day_30min if 8 <= ts.hour < 16])
     export_frame = utils.build_canon_frame(
-        daylight_idx,
-        np.full(len(daylight_idx), 0.1),
+        day_ts,
+        np.full(len(day_ts), 0.1),
         nmi="Q123",
         channel="B1",
         flow="grid_export_solar",
         cadence_min=30,
     )
-    return pd.concat([import_frame, export_frame]).sort_index()
+    return pl.concat([import_frame, export_frame]).sort("t_start")
 
 
 def test_run_no_scenario_preserves_totals(multi_flow_df):
-    """Regression: summary_before and summary_after totals must match the
-    baseline when no EV/PV/battery is added.
-
-    Before the idx_full fix, idx_full included duplicate timestamps (one per
-    flow), causing every value to be replicated and totals to double.
-    """
+    """Regression: summary_before and summary_after totals must match the baseline."""
     result = scenario.run(multi_flow_df)
 
     before_import = result.summary_before["stats"]["total_import_kwh"]
     after_import = result.summary_after["stats"]["total_import_kwh"]
-
     before_export = result.summary_before["stats"]["solar_export_kwh"]
     after_export = result.summary_after["stats"]["solar_export_kwh"]
 
-    # After = baseline (no additions); must not be doubled
-    assert (
-        abs(after_import - before_import) < 1e-6
-    ), f"Import doubled: before={before_import}, after={after_import}"
-    assert (
-        abs(after_export - before_export) < 1e-6
-    ), f"Export doubled: before={before_export}, after={after_export}"
+    assert abs(after_import - before_import) < 1e-6
+    assert abs(after_export - before_export) < 1e-6
 
 
 def test_run_multiflow_import_total_is_not_doubled(multi_flow_df):
-    """Regression: total_import_kwh in summary_before must reflect actual data,
-    not a doubled value due to duplicate-index reindex.
-
-    The fixture has 32 night intervals × 0.5 kWh = 16.0 kWh import.
-    (16 daytime slots use export-only rows.)
-    """
+    """Regression: total_import_kwh must reflect actual data, not doubled."""
     result = scenario.run(multi_flow_df)
     expected_import = 32 * 0.5  # 16.0 kWh (night slots only)
     actual = result.summary_before["stats"]["total_import_kwh"]
-    assert (
-        abs(actual - expected_import) < 0.01
-    ), f"Expected {expected_import} kWh import, got {actual} — possible doubling regression"
+    assert abs(actual - expected_import) < 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -310,11 +287,7 @@ def test_run_multiflow_import_total_is_not_doubled(multi_flow_df):
 
 
 def test_battery_with_pv_reduces_import(day_30min):
-    """A battery paired with PV should reduce grid import compared to PV alone.
-
-    The battery absorbs daytime PV excess and discharges in the evening,
-    reducing the net draw from the grid.
-    """
+    """A battery paired with PV should reduce grid import compared to PV alone."""
     base = utils.build_canon_frame(
         day_30min,
         np.full(len(day_30min), 0.5),
@@ -332,15 +305,11 @@ def test_battery_with_pv_reduces_import(day_30min):
     import_pv = result_pv_only.summary_after["stats"]["total_import_kwh"]
     import_pv_bat = result_pv_bat.summary_after["stats"]["total_import_kwh"]
 
-    assert (
-        import_pv_bat <= import_pv
-    ), f"Battery+PV import ({import_pv_bat}) should be ≤ PV-only import ({import_pv})"
+    assert import_pv_bat <= import_pv
 
 
 def test_battery_only_does_not_increase_import(day_30min):
-    """Battery without PV has no source to charge from (MVP: PV-only charging).
-    The after-import must equal the before-import — not increase.
-    """
+    """Battery without PV: after-import must equal before-import."""
     base = utils.build_canon_frame(
         day_30min,
         np.full(len(day_30min), 0.5),
@@ -356,14 +325,11 @@ def test_battery_only_does_not_increase_import(day_30min):
     before = result.summary_before["stats"]["total_import_kwh"]
     after = result.summary_after["stats"]["total_import_kwh"]
 
-    assert after <= before + 1e-6, f"Battery-only raised import: before={before}, after={after}"
+    assert after <= before + 1e-6
 
 
 def test_battery_without_pv_is_strict_noop(day_30min):
-    """Battery-only on an import-only baseline (no existing solar export) is a
-    strict no-op: no export to charge from, so charge/discharge stay at zero
-    and before/after totals match exactly.
-    """
+    """Battery-only on import-only baseline (no existing solar) is a strict no-op."""
     base = utils.build_canon_frame(
         day_30min,
         np.full(len(day_30min), 0.5),
@@ -389,8 +355,7 @@ def test_battery_without_pv_is_strict_noop(day_30min):
 
 def test_ev_mf_strategy_skips_weekends_and_hits_daily_target():
     """EV(MF) should charge only on weekdays and hit daily_kwh target each weekday."""
-    idx = pd.date_range("2025-01-06", periods=7 * 48, freq="30min", tz="Australia/Brisbane")
-    # Zero baseline to isolate EV contribution in after-series.
+    idx = _ts_range("2025-01-06", 7 * 48, 30)  # Mon 2025-01-06 for 7 days
     base = utils.build_canon_frame(
         idx,
         np.zeros(len(idx)),
@@ -410,23 +375,16 @@ def test_ev_mf_strategy_skips_weekends_and_hits_daily_target():
 
     result = scenario.run(base, ev=ev_cfg)
 
-    # Exactly 5 weekdays in the selected week.
     assert abs(result.explain["ev_kwh"] - (5 * ev_cfg.daily_kwh)) < 1e-6
 
     df_after = result.df_after
-    weekend = pd.Series(df_after.index.dayofweek >= 5, index=df_after.index)
-    weekend_kwh = float(df_after.loc[weekend, "kwh"].sum()) if len(df_after) else 0.0
+    # weekday(): Mon=0 ... Sat=5, Sun=6
+    weekend_kwh = float(df_after.filter(pl.col("t_start").dt.weekday() >= 6)["kwh"].sum())
     assert weekend_kwh < 1e-9
 
 
 def test_run_energy_balance_invariant_with_ev_pv_battery(day_30min):
-    """End-to-end conservation check for scenario.run.
-
-    For one intervalized horizon:
-      import_reduction = (baseline_import + ev - after_import)
-      pv_effective_on_import = pv + battery_discharge - battery_charge - export_delta
-    These two should match within numerical tolerance.
-    """
+    """End-to-end conservation check for scenario.run."""
     base = utils.build_canon_frame(
         day_30min,
         np.full(len(day_30min), 0.8),
@@ -462,10 +420,7 @@ def test_run_energy_balance_invariant_with_ev_pv_battery(day_30min):
     import_reduction = before_import + ev_kwh - after_import
     pv_effective_on_import = pv_kwh + bat_dis - bat_ch - export_delta
 
-    assert abs(import_reduction - pv_effective_on_import) < 1e-6, (
-        "Scenario energy-balance invariant failed: "
-        f"import_reduction={import_reduction}, pv_effective_on_import={pv_effective_on_import}"
-    )
+    assert abs(import_reduction - pv_effective_on_import) < 1e-6
 
 
 def test_run_delta_matches_before_after_summaries(day_30min):
@@ -495,36 +450,23 @@ def test_run_delta_matches_before_after_summaries(day_30min):
 
 
 def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
-    """Regression: EV-only scenario (night charging) must not raise daytime profile24.
-
-    Adding EV with window 18:00–22:00 should leave daytime slots (08:00–16:00)
-    unchanged in profile24, because EV never charges during the day. Before the
-    fix, zero-import intervals were dropped from df_after causing the mean for
-    solar-era daytime slots to be computed over fewer (all-positive) samples,
-    biasing the daytime average upward.
-    """
-
-    # Build two days where slots 12:00–14:00 have zero import (mimicking full
-    # solar offset). Other daytime slots have modest import.
-    idx = pd.date_range("2025-01-13", periods=2 * 48, freq="30min", tz="Australia/Brisbane")
+    """Regression: EV-only scenario (night charging) must not raise daytime profile24."""
+    idx = _ts_range("2025-01-13", 2 * 48, 30)
     kwh_vals = np.full(len(idx), 0.3)
-    # Zero out 12:00–13:30 slots (8 slots per day) to simulate solar coverage.
-    for i, ts in enumerate(idx):
-        if ts.hour in (12, 13):
-            kwh_vals[i] = 0.0
+    hours = idx.dt.hour().to_numpy()
+    kwh_vals[(hours == 12) | (hours == 13)] = 0.0
 
-    # Build a minimal canonical frame from ingest (not raw build_canon_frame)
-    # so it matches what real data looks like.
-    raw = pd.DataFrame(
+    n = len(idx)
+    raw = pl.DataFrame(
         {
             "t_start": idx,
-            "nmi": "Q",
-            "channel": "E1",
-            "flow": "grid_import",
-            "kwh": kwh_vals,
-            "cadence_min": 30,
+            "nmi": pl.Series(["Q"] * n),
+            "channel": pl.Series(["E1"] * n),
+            "flow": pl.Series(["grid_import"] * n),
+            "kwh": pl.Series(kwh_vals.tolist(), dtype=pl.Float64),
+            "cadence_min": pl.Series([30] * n, dtype=pl.Int32),
         }
-    ).set_index("t_start")
+    )
 
     result = scenario.run(
         raw,
@@ -538,7 +480,6 @@ def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
         ),
     )
 
-    # Extract profile24 slot values for 12:00 from before and after.
     before_prof = {r["slot"]: r for r in result.summary_before["datasets"]["profile24"]}
     after_prof = {r["slot"]: r for r in result.summary_after["datasets"]["profile24"]}
 
@@ -547,25 +488,8 @@ def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
         after_val = float(after_prof.get(slot, {}).get("import_total", 0.0))
         assert abs(after_val - before_val) < 1e-9, (
             f"Slot {slot} profile24 changed after EV-only scenario: "
-            f"before={before_val:.4f}, after={after_val:.4f}. "
-            "Daytime import must not change when EV charges at night."
+            f"before={before_val:.4f}, after={after_val:.4f}."
         )
-
-
-def _series_from_after(df_after, idx, flow_name):
-    """Rebuild a dense per-interval series for a flow from sparse canonical rows."""
-    if len(df_after) == 0:
-        return np.zeros(len(idx), dtype=float)
-    flow_mask = df_after["flow"] == flow_name
-    if not flow_mask.any():
-        return np.zeros(len(idx), dtype=float)
-    return (
-        df_after.loc[flow_mask]
-        .groupby(level=0)["kwh"]
-        .sum()
-        .reindex(idx, fill_value=0.0)
-        .to_numpy(dtype=float)
-    )
 
 
 def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
@@ -581,7 +505,7 @@ def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
     )
     ev_cfg = mdtypes.EVConfig(
         daily_kwh=2.0,
-        max_kw=2.0,  # per-interval cap = 1.0 kWh
+        max_kw=2.0,
         window_start="18:00",
         window_end="20:00",
         days="ALL",
@@ -589,7 +513,7 @@ def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
     )
 
     result = scenario.run(base, ev=ev_cfg)
-    expected_ev = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5).to_numpy(dtype=float)
+    expected_ev = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5)
     expected_import = baseline + expected_ev
 
     actual_import = _series_from_after(result.df_after, day_30min, "grid_import")
@@ -613,7 +537,7 @@ def test_run_pv_only_trace_matches_expected_split(day_30min):
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
 
     result = scenario.run(base, pv=pv_cfg)
-    expected_pv = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_numpy(dtype=float)
+    expected_pv = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
     expected_import = np.maximum(baseline - expected_pv, 0.0)
     expected_export = np.maximum(expected_pv - baseline, 0.0)
 
@@ -640,7 +564,7 @@ def test_run_pv_battery_trace_matches_dispatch(day_30min):
 
     result = scenario.run(base, pv=pv_cfg, battery=bat_cfg)
 
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_numpy(dtype=float)
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
     used_by_load = np.minimum(pv_arr, baseline)
     expected_import = baseline - used_by_load
     expected_leftover = pv_arr - used_by_load
@@ -668,61 +592,40 @@ def test_run_pv_battery_trace_matches_dispatch(day_30min):
 def solar_customer_df(day_30min):
     """Canonical df for a net-metered solar customer (stacked case).
 
-    Mirrors a typical QB-style NEM12 dataset: either importing or exporting
-    at each interval, never both simultaneously.
-    - Night (outside 08:00–16:00): import=0.5 kWh, no export row.
-    - Daytime (08:00–15:30): no import row, export=0.4 kWh (solar > load).
+    Night (outside 08:00-16:00): import=0.5 kWh, no export row.
+    Daytime (08:00-15:30): no import row, export=0.4 kWh (solar > load).
     """
-    # Night: import only
-    night_idx = pd.DatetimeIndex([ts for ts in day_30min if not (8 <= ts.hour < 16)])
+    hours = day_30min.dt.hour().to_numpy()
+    night_mask = ~((hours >= 8) & (hours < 16))
+    day_mask_arr = (hours >= 8) & (hours < 16)
+
+    night_ts = day_30min.filter(pl.Series(night_mask.tolist()))
+    day_ts = day_30min.filter(pl.Series(day_mask_arr.tolist()))
+
     imp = utils.build_canon_frame(
-        night_idx,
-        np.full(len(night_idx), 0.5),
-        nmi="Q",
-        channel="E1",
-        flow="grid_import",
-        cadence_min=30,
+        night_ts, np.full(len(night_ts), 0.5),
+        nmi="Q", channel="E1", flow="grid_import", cadence_min=30,
     )
-    # Daytime: export only (solar fully covers load, exporting surplus)
-    daylight_idx = pd.DatetimeIndex([ts for ts in day_30min if 8 <= ts.hour < 16])
     exp = utils.build_canon_frame(
-        daylight_idx,
-        np.full(len(daylight_idx), 0.4),
-        nmi="Q",
-        channel="B1",
-        flow="grid_export_solar",
-        cadence_min=30,
+        day_ts, np.full(len(day_ts), 0.4),
+        nmi="Q", channel="B1", flow="grid_export_solar", cadence_min=30,
     )
-    return pd.concat([imp, exp]).sort_index()
+    return pl.concat([imp, exp]).sort("t_start")
 
 
 def test_battery_only_with_existing_solar_reduces_import_and_export(solar_customer_df):
-    """Battery-only scenario on a customer who already has solar export.
-
-    The battery should charge from existing solar export during the day and
-    discharge to reduce evening/night import. Both import and export must
-    decrease compared to the baseline.
-    """
+    """Battery-only scenario on a customer who already has solar export."""
     bat_cfg = mdtypes.BatteryConfig(capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9)
     result = scenario.run(solar_customer_df, battery=bat_cfg)
 
-    assert (
-        result.delta["import_kwh_delta"] < 0
-    ), "Battery should reduce import by discharging against evening load"
-    assert (
-        result.delta["export_kwh_delta"] < 0
-    ), "Battery should reduce export by absorbing solar that would have been sent to grid"
-    assert result.explain["battery_charge_kwh"] > 0, "Battery must have charged from existing solar"
-    assert (
-        result.explain["battery_discharge_kwh"] > 0
-    ), "Battery must have discharged to reduce import"
+    assert result.delta["import_kwh_delta"] < 0
+    assert result.delta["export_kwh_delta"] < 0
+    assert result.explain["battery_charge_kwh"] > 0
+    assert result.explain["battery_discharge_kwh"] > 0
 
 
 def test_pv_stacked_increases_export_and_decreases_import(solar_customer_df):
-    """Adding PV to a dataset that already has solar export (stacked mode):
-    - import should decrease (PV offsets some load)
-    - export should increase (excess PV added to existing export)
-    """
+    """Adding PV to a dataset that already has solar export."""
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     result = scenario.run(solar_customer_df, pv=pv_cfg)
 
@@ -735,26 +638,12 @@ def test_pv_stacked_export_equals_original_plus_new_excess(solar_customer_df, da
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     result = scenario.run(solar_customer_df, pv=pv_cfg)
 
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_numpy(dtype=float)
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
+    orig_import = _flow_to_array(solar_customer_df, day_30min, "grid_import")
+    orig_export = _flow_to_array(solar_customer_df, day_30min, "grid_export_solar")
 
-    orig_import = (
-        solar_customer_df[solar_customer_df["flow"] == "grid_import"]
-        .groupby(level=0)["kwh"]
-        .sum()
-        .reindex(day_30min, fill_value=0.0)
-        .to_numpy()
-    )
-    orig_export = (
-        solar_customer_df[solar_customer_df["flow"] == "grid_export_solar"]
-        .groupby(level=0)["kwh"]
-        .sum()
-        .reindex(day_30min, fill_value=0.0)
-        .to_numpy()
-    )
-
-    # Net-meter formulation: PV offsets net load (import - export), not just import.
     net_before = orig_import - orig_export
-    net_after = net_before - pv_arr  # no EV
+    net_after = net_before - pv_arr
     expected_after_export = np.maximum(-net_after, 0.0)
 
     actual_after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
@@ -774,7 +663,7 @@ def test_pv_self_consumption_pct_is_accurate(day_30min):
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     result = scenario.run(base, pv=pv_cfg)
 
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_numpy(dtype=float)
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
     baseline = np.full(len(day_30min), 0.3)
     used_by_load = np.minimum(pv_arr, baseline)
     pv_total = pv_arr.sum()
@@ -782,9 +671,7 @@ def test_pv_self_consumption_pct_is_accurate(day_30min):
 
     actual_pct = result.explain.get("pv_self_consumption_pct")
     assert actual_pct is not None
-    assert (
-        abs(actual_pct - expected_pct) < 1e-6
-    ), f"pv_self_consumption_pct={actual_pct:.4f}%, expected={expected_pct:.4f}%"
+    assert abs(actual_pct - expected_pct) < 1e-6
 
 
 def test_pv_does_not_change_evening_peak_demand(day_30min):
@@ -792,9 +679,8 @@ def test_pv_does_not_change_evening_peak_demand(day_30min):
     must not affect the peak demand figure reported in the summary.
     """
     kwh_vals = np.full(len(day_30min), 0.3)
-    for i, ts in enumerate(day_30min):
-        if ts.hour == 19:
-            kwh_vals[i] = 2.0  # 4.0 kW evening peak
+    hours = day_30min.dt.hour().to_numpy()
+    kwh_vals[hours == 19] = 2.0
 
     base = utils.build_canon_frame(
         day_30min, kwh_vals, nmi="Q", channel="E1", flow="grid_import", cadence_min=30
@@ -805,10 +691,7 @@ def test_pv_does_not_change_evening_peak_demand(day_30min):
     before_peak = result.summary_before["stats"]["peak_consumption_kw"]
     after_peak = result.summary_after["stats"]["peak_consumption_kw"]
 
-    assert abs(after_peak - before_peak) < 1e-6, (
-        f"Evening peak changed after PV: before={before_peak:.4f}, after={after_peak:.4f}. "
-        "PV is zero at 19:00 so peak demand must be unchanged."
-    )
+    assert abs(after_peak - before_peak) < 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -817,17 +700,11 @@ def test_pv_does_not_change_evening_peak_demand(day_30min):
 
 
 def test_ev_on_solar_customer_no_simultaneous_import_and_export(solar_customer_df, day_30min):
-    """Regression: adding EV to a solar customer must not produce simultaneous
-    import AND export at the same interval.
-
-    The naive `s_import0 + ev` formulation ignores that existing solar export
-    can absorb EV demand. The net-meter formulation (`net_before + ev - pv`)
-    routes EV load through available solar surplus first.
-    """
+    """Regression: adding EV to a solar customer must not produce simultaneous import AND export."""
     ev_cfg = mdtypes.EVConfig(
         daily_kwh=4.0,
         max_kw=5.0,
-        window_start="09:00",  # daytime to overlap with solar export in the fixture
+        window_start="09:00",
         window_end="14:00",
         days="ALL",
         strategy="scheduled",
@@ -837,23 +714,14 @@ def test_ev_on_solar_customer_no_simultaneous_import_and_export(solar_customer_d
     after_import = _series_from_after(result.df_after, day_30min, "grid_import")
     after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    # At every interval, at most one of import or export may be positive.
     both_positive = (after_import > 1e-9) & (after_export > 1e-9)
     assert not both_positive.any(), (
-        f"Simultaneous import and export found at {both_positive.sum()} interval(s). "
-        "EV demand during solar hours should reduce export, not add import alongside it."
+        f"Simultaneous import and export found at {both_positive.sum()} interval(s)."
     )
 
 
 def test_ev_on_solar_customer_reduces_export_before_adding_import(solar_customer_df, day_30min):
-    """When EV is added during solar hours, existing export should be consumed
-    first. Only intervals where EV demand exceeds the available export surplus
-    should switch to importing from the grid.
-
-    Fixture solar export is 0.2 kWh/interval (0.4 kW). EV scheduled at 0.25 kWh
-    per slot (0.5 kW). In the solar window, EV > export → some import is expected,
-    but export should drop to ~0 (fully consumed) rather than staying at 0.2.
-    """
+    """EV during solar hours should consume export before adding import."""
     ev_cfg = mdtypes.EVConfig(
         daily_kwh=4.0,
         max_kw=5.0,
@@ -862,31 +730,15 @@ def test_ev_on_solar_customer_reduces_export_before_adding_import(solar_customer
         days="ALL",
         strategy="scheduled",
     )
-    baseline_export = (
-        solar_customer_df[solar_customer_df["flow"] == "grid_export_solar"]
-        .groupby(level=0)["kwh"]
-        .sum()
-        .reindex(day_30min, fill_value=0.0)
-        .to_numpy()
-    )
+    baseline_export = _flow_to_array(solar_customer_df, day_30min, "grid_export_solar")
     result = scenario.run(solar_customer_df, ev=ev_cfg)
-
     after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    # Solar window export must be ≤ baseline (EV must have consumed some of it)
-    assert after_export.sum() < baseline_export.sum(), (
-        "EV during solar hours should reduce total export "
-        f"(before={baseline_export.sum():.3f}, after={after_export.sum():.3f})"
-    )
+    assert after_export.sum() < baseline_export.sum()
 
 
 def test_ev_pv_battery_combo_on_solar_customer_energy_balance(solar_customer_df, day_30min):
-    """Full combo (EV + PV + battery) on an existing-solar customer.
-
-    Verifies the energy-balance invariant holds for the net-meter formulation:
-      import_reduction = used_by_load + battery_discharge
-      (where import_reduction accounts for EV load added)
-    """
+    """Full combo (EV + PV + battery) on an existing-solar customer energy balance."""
     ev_cfg = mdtypes.EVConfig(
         daily_kwh=6.0,
         max_kw=7.0,
@@ -911,23 +763,14 @@ def test_ev_pv_battery_combo_on_solar_customer_energy_balance(solar_customer_df,
     bat_ch = float(result.explain["battery_charge_kwh"])
     export_delta = after_export - before_export
 
-    # import_reduction: how much the scenario reduced net grid draw (EV adds, everything else reduces)
     import_reduction = before_import + ev_kwh - after_import
     pv_effective_on_import = pv_kwh + bat_dis - bat_ch - export_delta
 
-    assert abs(import_reduction - pv_effective_on_import) < 1e-6, (
-        f"Energy-balance invariant failed on solar customer: "
-        f"import_reduction={import_reduction:.6f}, "
-        f"pv_effective_on_import={pv_effective_on_import:.6f}"
-    )
+    assert abs(import_reduction - pv_effective_on_import) < 1e-6
 
 
 def test_ev_pv_battery_combo_golden_trace(day_30min):
-    """Golden-trace test for full EV+PV+battery combo on an import-only baseline.
-
-    Verifies per-interval import/export arrays match the manually computed dispatch.
-    This ensures the combo path (ev → pv → battery) is wired in the correct order.
-    """
+    """Golden-trace test for full EV+PV+battery combo on an import-only baseline."""
     baseline = np.full(len(day_30min), 0.6, dtype=float)
     base = utils.build_canon_frame(
         day_30min,
@@ -950,26 +793,22 @@ def test_ev_pv_battery_combo_golden_trace(day_30min):
 
     result = scenario.run(base, ev=ev_cfg, pv=pv_cfg, battery=bat_cfg)
 
-    # Manually reproduce the dispatch pipeline (import-only → s_export0=0)
-    ev_arr = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5).to_numpy(dtype=float)
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_numpy(dtype=float)
+    ev_arr = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5)
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
 
-    net_after = baseline + ev_arr - pv_arr  # net_before = baseline (no existing export)
+    net_after = baseline + ev_arr - pv_arr
     expected_import = np.maximum(net_after, 0.0)
     expected_excess = np.maximum(-net_after, 0.0)
 
-    # Pass arrays directly — _apply_battery_self_consume mutates them in-place.
     _dis, _ch, _soc = scenario._apply_battery_self_consume(
-        expected_import,  # mutated by battery discharge
-        expected_excess,  # mutated by battery charge
+        expected_import,
+        expected_excess,
         bat_cfg,
         0.5,
     )
-    expected_import_final = expected_import  # post-battery (mutated)
-    expected_export_final = expected_excess  # post-battery (mutated)
 
     actual_import = _series_from_after(result.df_after, day_30min, "grid_import")
     actual_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    np.testing.assert_allclose(actual_import, expected_import_final, rtol=0, atol=1e-9)
-    np.testing.assert_allclose(actual_export, expected_export_final, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(actual_import, expected_import, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(actual_export, expected_excess, rtol=0, atol=1e-9)

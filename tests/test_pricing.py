@@ -1,36 +1,47 @@
-"""Pricing tests exercising monthly billables merge and cost math.
+"""Pricing tests exercising monthly billables merge and cost math."""
 
-- test_no_demand_no_export: plan without demand/feed-in; energy cost > 0, others 0.
-- test_feed_in_credit_negative: presence of export yields negative credit.
-- test_pricing_estimate_monthly_cost: full plan smoke with all components present.
-"""
-
-import pandas as pd
+import datetime as _dt
 import numpy as np
+import polars as pl
+import pytest
 
 from meterdatalogic import pricing, utils, ingest
 import meterdatalogic.types as mdtypes
 
+TZ = "Australia/Brisbane"
 
-def _mk_io_week(idx):
-    """Build a week with steady import and sparse export (every 4th slot)."""
+
+def _ts_range(start: str, periods: int, freq_min: int) -> pl.Series:
+    base = _dt.datetime.fromisoformat(start)
+    times = [base + _dt.timedelta(minutes=freq_min * i) for i in range(periods)]
+    return pl.Series(times, dtype=pl.Datetime("us")).dt.replace_time_zone(TZ)
+
+
+def _mk_io_week(halfhour_rng: pl.Series) -> pl.DataFrame:
+    """Build a week with steady import and sparse export."""
+    n = len(halfhour_rng)
     imp = utils.build_canon_frame(
-        idx,
-        np.ones(len(idx)) * 0.5,  # 0.5 kWh per slot
+        halfhour_rng,
+        np.ones(n) * 0.5,
         nmi="Q123",
         channel="E1",
         flow="grid_import",
         cadence_min=30,
     )
+    export_idx = halfhour_rng.gather(list(range(0, n, 4)))
     exp = utils.build_canon_frame(
-        idx[::4],
-        np.ones(len(idx[::4])) * 0.25,  # 0.25 kWh on a subset of slots
+        export_idx,
+        np.ones(len(export_idx)) * 0.25,
         nmi="Q123",
         channel="B1",
         flow="grid_export_solar",
         cadence_min=120,
     )
-    return pd.concat([imp, exp]).sort_index()
+    return pl.concat([imp, exp]).sort("t_start")
+
+
+def _months_from_series(ts: pl.Series) -> list[str]:
+    return ts.dt.strftime("%Y-%m").unique().sort().to_list()
 
 
 def test_no_demand_no_export(halfhour_rng, monkeypatch):
@@ -43,7 +54,6 @@ def test_no_demand_no_export(halfhour_rng, monkeypatch):
         flow="grid_import",
         cadence_min=30,
     )
-    # Plan with a single all-day band, no demand or feed-in.
     plan = mdtypes.Plan(
         usage_bands=[
             mdtypes.ToUBand(name="peak_kwh", start="00:00", end="24:00", rate_c_per_kwh=20.0)
@@ -52,32 +62,13 @@ def test_no_demand_no_export(halfhour_rng, monkeypatch):
         fixed_c_per_day=0.0,
         feed_in_c_per_kwh=0.0,
     )
-    # Monkeypatch TOU to emit fixed monthly kWh for determinism.
-    monkeypatch.setattr(
-        pricing.transform,
-        "tou_bins",
-        lambda d, bands: pd.DataFrame(
-            {
-                "month": utils.month_label(d.index.unique()).unique(),
-                "peak_kwh": [100.0] * len(utils.month_label(d.index.unique()).unique()),
-            }
-        ),
-        raising=True,
-    )
-    # No demand in this plan.
-    monkeypatch.setattr(
-        pricing.transform,
-        "aggregate",
-        lambda *a, **k: pd.DataFrame(
-            {
-                "t_start": pd.to_datetime(
-                    [m + "-01" for m in utils.month_label(df.index).unique()]
-                ),
-                "demand_kw": 0.0,
-            }
-        ),
-        raising=True,
-    )
+
+    def fake_tou(d, bands):
+        months = _months_from_series(d["t_start"])
+        return pl.DataFrame({"month": months, "peak_kwh": [100.0] * len(months)})
+
+    monkeypatch.setattr(pricing.transform, "tou_bins", fake_tou, raising=True)
+
     bill = pricing.compute_billables(df, plan, mode="monthly")
     cost = pricing.estimate_costs(bill, plan)
     assert (cost["demand_cost"] == 0).all()
@@ -86,7 +77,7 @@ def test_no_demand_no_export(halfhour_rng, monkeypatch):
 
 
 def test_feed_in_credit_negative(halfhour_rng, monkeypatch):
-    """Export presence should create a non-positive (negative/zero) feed-in credit."""
+    """Export presence should create a non-positive feed-in credit."""
     df = _mk_io_week(halfhour_rng)
     plan = mdtypes.Plan(
         usage_bands=[
@@ -96,37 +87,20 @@ def test_feed_in_credit_negative(halfhour_rng, monkeypatch):
         fixed_c_per_day=0.0,
         feed_in_c_per_kwh=5.0,
     )
-    # Deterministic TOU and zero demand for isolation.
-    monkeypatch.setattr(
-        pricing.transform,
-        "tou_bins",
-        lambda d, bands: pd.DataFrame(
-            {
-                "month": utils.month_label(d.index.unique()).unique(),
-                "peak_kwh": [100.0] * len(utils.month_label(d.index.unique()).unique()),
-            }
-        ),
-        raising=True,
-    )
-    monkeypatch.setattr(
-        pricing.transform,
-        "aggregate",
-        lambda *a, **k: pd.DataFrame(
-            {
-                "t_start": pd.to_datetime(
-                    [m + "-01" for m in utils.month_label(df.index).unique()]
-                ),
-                "demand_kw": 0.0,
-            }
-        ),
-        raising=True,
-    )
+
+    def fake_tou(d, bands):
+        months = _months_from_series(d["t_start"])
+        return pl.DataFrame({"month": months, "peak_kwh": [100.0] * len(months)})
+
+    monkeypatch.setattr(pricing.transform, "tou_bins", fake_tou, raising=True)
+
     bill = pricing.compute_billables(df, plan, mode="monthly")
     cost = pricing.estimate_costs(bill, plan)
-    assert "export_kwh" in bill.columns  # monthly export aggregation included
+    assert "export_kwh" in bill.columns
     assert (cost["feed_in_credit"] <= 0).all()
-    # Total must equal sum of components.
-    recomputed = cost[["energy_cost", "demand_cost", "fixed_cost", "feed_in_credit"]].sum(axis=1)
+    recomputed = (
+        cost["energy_cost"] + cost["demand_cost"] + cost["fixed_cost"] + cost["feed_in_credit"]
+    )
     assert (abs(recomputed - cost["total"]) < 1e-9).all()
 
 
@@ -149,13 +123,12 @@ def test_pricing_estimate_monthly_cost(canon_df_mixed_flows):
     cost = pricing.estimate_costs(bill, plan)
     assert set(
         ["month", "energy_cost", "demand_cost", "fixed_cost", "feed_in_credit", "total"]
-    ).issubset(cost.columns)
-    assert cost["total"].dtype.kind in "fc"
+    ).issubset(set(cost.columns))
+    assert cost["total"].dtype in (pl.Float64, pl.Float32)
 
 
 def test_compute_billables_optional_flows(halfhour_rng):
-    """Test that include_controlled_load and include_total_import add expected columns."""
-    # Build data with controlled load and multiple import flows
+    """include_controlled_load and include_total_import add expected columns."""
     import_df = utils.build_canon_frame(
         halfhour_rng,
         np.ones(len(halfhour_rng)) * 0.5,
@@ -164,23 +137,27 @@ def test_compute_billables_optional_flows(halfhour_rng):
         flow="grid_import",
         cadence_min=30,
     )
+    n_cl = len(halfhour_rng) // 2
+    cl_series = halfhour_rng.gather(list(range(0, len(halfhour_rng), 2)))
     cl_df = utils.build_canon_frame(
-        halfhour_rng[::2],  # Every other interval
-        np.ones(len(halfhour_rng[::2])) * 0.3,
+        cl_series,
+        np.ones(n_cl) * 0.3,
         nmi="Q123",
         channel="E2",
         flow="controlled_load_import",
         cadence_min=60,
     )
+    n_exp = len(halfhour_rng) // 3
+    exp_series = halfhour_rng.gather(list(range(0, len(halfhour_rng), 3)))
     export_df = utils.build_canon_frame(
-        halfhour_rng[::3],
-        np.ones(len(halfhour_rng[::3])) * 0.2,
+        exp_series,
+        np.ones(n_exp) * 0.2,
         nmi="Q123",
         channel="B1",
         flow="grid_export_solar",
         cadence_min=90,
     )
-    df = pd.concat([import_df, cl_df, export_df]).sort_index()
+    df = pl.concat([import_df, cl_df, export_df]).sort("t_start")
 
     plan = mdtypes.Plan(
         usage_bands=[
@@ -191,25 +168,21 @@ def test_compute_billables_optional_flows(halfhour_rng):
         feed_in_c_per_kwh=8.0,
     )
 
-    # Test default - no optional columns
     bill_default = pricing.compute_billables(df, plan, mode="monthly")
     assert "controlled_load_kwh" not in bill_default.columns
     assert "total_import_kwh" not in bill_default.columns
     assert "export_kwh" in bill_default.columns
 
-    # Test with controlled load
     bill_cl = pricing.compute_billables(df, plan, mode="monthly", include_controlled_load=True)
     assert "controlled_load_kwh" in bill_cl.columns
     assert "total_import_kwh" not in bill_cl.columns
     assert (bill_cl["controlled_load_kwh"] >= 0).all()
 
-    # Test with total import
     bill_ti = pricing.compute_billables(df, plan, mode="monthly", include_total_import=True)
     assert "controlled_load_kwh" not in bill_ti.columns
     assert "total_import_kwh" in bill_ti.columns
     assert (bill_ti["total_import_kwh"] >= 0).all()
 
-    # Test with both
     bill_both = pricing.compute_billables(
         df, plan, mode="monthly", include_controlled_load=True, include_total_import=True
     )
@@ -217,5 +190,4 @@ def test_compute_billables_optional_flows(halfhour_rng):
     assert "total_import_kwh" in bill_both.columns
     assert (bill_both["controlled_load_kwh"] >= 0).all()
     assert (bill_both["total_import_kwh"] >= 0).all()
-    # Total import should be >= controlled load (since controlled_load is a type of import)
     assert (bill_both["total_import_kwh"] >= bill_both["controlled_load_kwh"]).all()

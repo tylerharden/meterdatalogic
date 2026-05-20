@@ -1,8 +1,9 @@
 from __future__ import annotations
-import pandas as pd
+import numpy as np
+import polars as pl
 from typing import Literal, Iterable, Optional, Sequence
 
-from . import utils
+from . import utils, canon
 from .types import CanonFrame
 
 
@@ -22,50 +23,68 @@ SEASON_DEFINITIONS = {
     },
 }
 
+# Pandas-style → polars duration strings
+_FREQ_MAP = {
+    "1MS": "1mo",
+    "MS": "1mo",
+    "1D": "1d",
+    "D": "1d",
+    "1h": "1h",
+    "h": "1h",
+    "30min": "30m",
+    "30T": "30m",
+}
+
+
+def _to_polars_freq(freq: str) -> str:
+    return _FREQ_MAP.get(freq, freq)
+
 
 def _filter_range(
     df: CanonFrame,
-    start: Optional[pd.Timestamp] = None,
-    end: Optional[pd.Timestamp] = None,
-) -> pd.DataFrame:
-    return df.loc[start:end] if (start is not None or end is not None) else df
+    start: Optional[object] = None,
+    end: Optional[object] = None,
+) -> CanonFrame:
+    conditions = []
+    if start is not None:
+        conditions.append(pl.col("t_start") >= start)
+    if end is not None:
+        conditions.append(pl.col("t_start") <= end)
+    if conditions:
+        return df.filter(pl.all_horizontal(conditions))
+    return df
 
 
 def _time_window_mask(
-    idx: pd.DatetimeIndex,
+    t_start: pl.Series,
     *,
     start: str,
     end: str,
     days: Literal["ALL", "MF", "MS"] = "ALL",
-) -> pd.Series:
-    """Combined day-of-week and time-of-day mask for a tz-aware index."""
-    daymask = utils.day_mask(idx, days)
+) -> pl.Series:
+    """Combined day-of-week and time-of-day mask for a tz-aware Datetime Series."""
+    daymask = utils.day_mask(t_start, days)
     start_t = utils.parse_time_str(start)
     end_t = utils.parse_time_str(end)
-    times = utils.local_time_series(idx)
-    timemask = utils.time_in_range(times, start_t, end_t)
-    return pd.Series(daymask & timemask, index=idx)
+    timemask = utils.time_in_range(t_start, start_t, end_t)
+    return daymask & timemask
 
 
-def _assign_time_bands(idx: pd.DatetimeIndex, bands: Iterable[dict]) -> pd.Series:
-    """
-    Assign each timestamp to a named band. bands is a list of {name, start, end} in HH:MM.
-    Unmatched slots are 'unassigned'.
-    """
-    times = utils.local_time_series(idx)
-    assigned = pd.Series(index=idx, dtype="object")
+def _assign_time_bands(t_start: pl.Series, bands: Iterable[dict]) -> pl.Series:
+    """Assign each timestamp to a named band. Unmatched slots → 'unassigned'."""
+    result = np.array(["unassigned"] * len(t_start), dtype=object)
     for band in bands:
-        start = utils.parse_time_str(str(band["start"]))
-        end = utils.parse_time_str(str(band["end"]))
-        mask = utils.time_in_range(times, start, end)
-        assigned[mask] = str(band["name"])
-    return assigned.fillna("unassigned")
+        start_t = utils.parse_time_str(str(band["start"]))
+        end_t = utils.parse_time_str(str(band["end"]))
+        mask = utils.time_in_range(t_start, start_t, end_t).to_numpy()
+        result[mask] = str(band["name"])
+    return pl.Series(result.tolist(), dtype=pl.String)
 
 
-def _compute_power_from_energy(df: pd.DataFrame, *, energy_col: str = "kwh") -> pd.Series:
+def _compute_power_from_energy(df: pl.DataFrame, *, energy_col: str = "kwh") -> pl.Series:
     """Convert per-interval energy (kWh) to power (kW) using cadence_min."""
-    factor = 60.0 / df["cadence_min"].astype(float)
-    return (df[energy_col].astype(float) * factor).rename("kW")
+    factor = 60.0 / df["cadence_min"].cast(pl.Float64)
+    return (df[energy_col].cast(pl.Float64) * factor).rename("kW")
 
 
 def aggregate(
@@ -77,7 +96,6 @@ def aggregate(
     groupby: str | Sequence[str] | None = None,
     pivot: bool = False,
     flows: Iterable[str] | None = None,
-    # Optional window filter (time-of-day + day-of-week)
     window_start: str | None = None,
     window_end: str | None = None,
     window_days: Literal["ALL", "MF", "MS"] = "ALL",
@@ -87,210 +105,222 @@ def aggregate(
     label: Literal["left", "right"] = "left",
     closed: Literal["left", "right"] = "left",
     hemisphere: Literal["northern", "southern"] | None = None,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
-    Unified aggregation helper. Filters by flow, applies an optional time window, then resamples or groups.
-    Use metric="kW" to convert kWh to power. Use groupby="season" with hemisphere for seasonal splits.
+    Unified aggregation helper. Filters by flow, applies an optional time window,
+    then resamples or groups. metric='kW' converts kWh to power. groupby='season'
+    with hemisphere produces seasonal splits.
     """
-    if not isinstance(df.index, pd.DatetimeIndex):
-        raise TypeError("aggregate requires a DatetimeIndex index.")
+    if "t_start" not in df.columns:
+        raise TypeError("aggregate requires a 't_start' column.")
 
-    s = df.copy()
+    s = df
     if flows:
-        s = s[s["flow"].isin(list(flows))]
-    if s.empty:
+        s = s.filter(pl.col("flow").is_in(list(flows)))
+    if s.is_empty():
+        base_name = out_col or ("demand_kw" if metric == "kW" else value_col)
         if pivot and groupby:
-            return pd.DataFrame(index=pd.DatetimeIndex([], name="t_start"))
-        return pd.DataFrame(columns=["t_start", out_col or value_col])
+            return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us"))})
+        return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), base_name: []})
 
-    # optional window filter
+    # Optional time window filter
     if window_start is not None and window_end is not None:
         mask = _time_window_mask(
-            pd.DatetimeIndex(s.index),
-            start=window_start,
-            end=window_end,
-            days=window_days,
+            s["t_start"], start=window_start, end=window_end, days=window_days
         )
-        s = s[mask.values]
-        if s.empty:
+        s = s.filter(mask)
+        if s.is_empty():
+            base_name = out_col or ("demand_kw" if metric == "kW" else value_col)
             if pivot and groupby:
-                return pd.DataFrame(index=pd.DatetimeIndex([], name="t_start"))
-            return pd.DataFrame(columns=["t_start", out_col or value_col])
+                return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us"))})
+            return pl.DataFrame(
+                {"t_start": pl.Series([], dtype=pl.Datetime("us")), base_name: []}
+            )
 
     if metric == "kW":
-        base = _compute_power_from_energy(s, energy_col=value_col)
+        val_series = _compute_power_from_energy(s, energy_col=value_col)
         base_name = out_col or "demand_kw"
+        effective_stat = stat
     else:
-        base = s[value_col].astype(float)
+        val_series = s[value_col].cast(pl.Float64)
         base_name = out_col or value_col
+        effective_stat = agg
 
-    def _apply_agg(x: pd.Series, how: str):
-        if how == "max":
-            return x.max()
-        if how == "mean":
-            return x.mean()
-        if how == "sum":
-            return x.sum()
-        return getattr(x, how)()
+    s = s.with_columns(val_series.alias("_val"))
 
     grp_cols: list[str] = []
     if groupby is not None:
         grp_cols = [groupby] if isinstance(groupby, str) else list(groupby)
 
-    # Derive seasonal columns from the DatetimeIndex when groupby includes "season"
+    # Seasonal columns
     if "season" in grp_cols:
         if hemisphere is None:
             raise ValueError("hemisphere parameter required when groupby includes 'season'")
-
-        idx = pd.DatetimeIndex(s.index)
-        months = idx.month
-        years = idx.year
         season_months = SEASON_DEFINITIONS[hemisphere]
         month_to_season = {
             m: name for name, months_list in season_months.items() for m in months_list
         }
-        s["_season"] = months.map(month_to_season)
-        # December belongs to the following year's season
-        s["_season_year"] = years + (months == 12).astype(int)
-        grp_cols = ["_season" if col == "season" else col for col in grp_cols]
+        months = s["t_start"].dt.month()
+        years = s["t_start"].dt.year()
+        s = s.with_columns(
+            [
+                months.map_elements(
+                    lambda m: month_to_season.get(m, "Unknown"), return_dtype=pl.String
+                ).alias("_season"),
+                (years + (months == 12).cast(pl.Int32)).alias("_season_year"),
+            ]
+        )
+        grp_cols = ["_season" if c == "season" else c for c in grp_cols]
         if "_season_year" not in grp_cols:
             grp_cols.insert(grp_cols.index("_season") + 1, "_season_year")
 
+    def _agg_expr(col: str, how: str) -> pl.Expr:
+        if how == "max":
+            return pl.col(col).max()
+        if how == "mean":
+            return pl.col(col).mean()
+        return pl.col(col).sum()
+
     if freq is None:
-        # Aggregate without resampling: group by provided keys only
+        # Aggregate without resampling
         if grp_cols:
             out = (
-                s.assign(_val=base)
-                .groupby(grp_cols, observed=False)["_val"]
-                .apply(lambda x: _apply_agg(x, stat if metric == "kW" else agg))
+                s.group_by(grp_cols)
+                .agg(_agg_expr("_val", effective_stat).alias(base_name))
             )
-            out = out.reset_index().rename(columns={"_val": base_name})
         else:
-            out = pd.DataFrame({base_name: [_apply_agg(base, stat if metric == "kW" else agg)]})
+            agg_val = float(
+                s["_val"].max() if effective_stat == "max"
+                else (s["_val"].mean() if effective_stat == "mean" else s["_val"].sum())
+            )
+            out = pl.DataFrame({base_name: [agg_val]})
+
     elif grp_cols:
         # Resample with grouping
-        d = s.assign(_val=base)
+        every = _to_polars_freq(freq)
         res = (
-            d.groupby(grp_cols, observed=False)
-            .resample(freq, label=label, closed=closed)["_val"]
-            .apply(lambda x: _apply_agg(x, stat if metric == "kW" else agg))
+            s.sort("t_start")
+            .group_by_dynamic("t_start", every=every, group_by=grp_cols, closed=closed)
+            .agg(_agg_expr("_val", effective_stat).alias(base_name))
         )
         if pivot:
-            out = res.unstack(grp_cols).rename_axis("t_start").sort_index()
-            out = out.fillna(0.0)
+            # Only single-column groupby supported for pivot
+            pivot_col = grp_cols[0]
+            out = res.pivot(
+                index="t_start", on=pivot_col, values=base_name, aggregate_function="sum"
+            ).fill_null(0.0).sort("t_start")
         else:
-            out = res.reset_index().rename(columns={"_val": base_name})
+            out = res.sort("t_start")
+
     else:
-        # Pure resample, no grouping
-        res = base.resample(freq, label=label, closed=closed)
-        if metric == "kW":
-            series = res.max() if stat == "max" else (res.mean() if stat == "mean" else res.sum())
-        else:
-            series = res.agg(agg)
-        out = pd.DataFrame({base_name: series})
+        # Pure resample, no extra grouping
+        every = _to_polars_freq(freq)
+        out = (
+            s.sort("t_start")
+            .group_by_dynamic("t_start", every=every, closed=closed)
+            .agg(_agg_expr("_val", effective_stat).alias(base_name))
+            .sort("t_start")
+        )
 
-    if isinstance(out, pd.Series):
-        out = out.to_frame(name=base_name)
-
-    # Rename _season/_season_year back to season/year in all column contexts
+    # Rename _season/_season_year back to season/year
     if groupby is not None:
         grp_list = [groupby] if isinstance(groupby, str) else list(groupby)
         if "season" in grp_list:
             rename_map = {"_season": "season", "_season_year": "year"}
-            out = out.rename(columns=rename_map)
+            rename_present = {k: v for k, v in rename_map.items() if k in out.columns}
+            if rename_present:
+                out = out.rename(rename_present)
 
-            if isinstance(out.columns, pd.MultiIndex):
-                out.columns = out.columns.set_names(
-                    [rename_map.get(n, n) for n in out.columns.names]
-                )
-
-            if isinstance(out.index, pd.MultiIndex):
-                out.index = out.index.set_names([rename_map.get(n, n) for n in out.index.names])
-
-            # Sort by year then season order (non-pivot only)
             if hemisphere and "season" in out.columns and "year" in out.columns:
-                season_months = SEASON_DEFINITIONS[hemisphere]
-                season_order = {name: idx for idx, name in enumerate(season_months.keys())}
-                out = out.assign(_order=out["season"].map(season_order))
-                out = (
-                    out.sort_values(["year", "_order"])
-                    .drop(columns=["_order"])
-                    .reset_index(drop=True)
-                )
+                season_months_def = SEASON_DEFINITIONS[hemisphere]
+                season_order = {name: i for i, name in enumerate(season_months_def)}
+                out = out.with_columns(
+                    pl.col("season")
+                    .map_elements(lambda s: season_order.get(s, 99), return_dtype=pl.Int32)
+                    .alias("_order")
+                ).sort(["year", "_order"]).drop("_order")
 
     return out
 
 
 def tou_bins(
-    df: pd.DataFrame,
+    df: CanonFrame,
     bands: Iterable[dict],
     *,
     out_freq: str = "1MS",
     flows: Iterable[str] | None = ("grid_import",),
     value_col: str = "kwh",
-) -> pd.DataFrame:
-    """Aggregate energy into named TOU bands. Returns a month + per-band kWh frame at out_freq."""
-    s = df.copy()
+) -> pl.DataFrame:
+    """Aggregate energy into named TOU bands. Returns a month + per-band kWh frame."""
+    bands_list = list(bands)
+    s = df
     if flows:
-        s = s[s["flow"].isin(list(flows))]
-    if s.empty:
-        names = [str(b["name"]) for b in bands]
-        return pd.DataFrame(columns=["month", *names])
+        s = s.filter(pl.col("flow").is_in(list(flows)))
+    if s.is_empty():
+        names = [str(b["name"]) for b in bands_list]
+        return pl.DataFrame(
+            {"month": pl.Series([], dtype=pl.String), **{n: pl.Series([], dtype=pl.Float64) for n in names}}
+        )
 
-    s["band"] = _assign_time_bands(pd.DatetimeIndex(s.index), bands).reindex(s.index)
-    out = (
-        s.reset_index()
-        .groupby(["band", pd.Grouper(key="t_start", freq=out_freq)])[value_col]
-        .sum()
-        .unstack("band")
-        .fillna(0.0)
-        .reset_index()
+    s = s.with_columns(_assign_time_bands(s["t_start"], bands_list).alias("band"))
+
+    every = _to_polars_freq(out_freq)
+    grouped = (
+        s.sort("t_start")
+        .group_by_dynamic("t_start", every=every, group_by="band")
+        .agg(pl.col(value_col).sum())
     )
 
-    out = out.rename(columns={"t_start": "month"})
-    out["month"] = utils.month_label(out["month"])
+    out = grouped.pivot(
+        index="t_start", on="band", values=value_col, aggregate_function="sum"
+    ).fill_null(0.0).sort("t_start")
+
+    out = out.with_columns(
+        pl.col("t_start").dt.strftime("%Y-%m").alias("month")
+    ).drop("t_start")
+
     return out
 
 
-def base_from_profile(profile_with_import: pd.DataFrame, cadence_min: int) -> dict:
-    """Compute base load from average-day import profile.
-
-    Returns { base_kw, base_kwh_per_day }.
-    """
-    if profile_with_import.empty:
+def base_from_profile(profile_with_import: pl.DataFrame, cadence_min: int) -> dict:
+    """Compute base load from average-day import profile. Returns {base_kw, base_kwh_per_day}."""
+    if profile_with_import.is_empty():
         return {"base_kw": 0.0, "base_kwh_per_day": 0.0}
     base_interval_kwh = float(profile_with_import["import_total"].min())
     base_kw = base_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
-    base_kwh_per_day = base_kw * 24.0
-    return {"base_kw": float(base_kw), "base_kwh_per_day": float(base_kwh_per_day)}
+    return {"base_kw": float(base_kw), "base_kwh_per_day": float(base_kw * 24.0)}
 
 
 def window_stats_from_profile(
-    profile_with_import: pd.DataFrame,
+    profile_with_import: pl.DataFrame,
     windows: list[dict],
     cadence_min: int,
     total_daily_kwh: float | None = None,
 ) -> dict:
-    """Compute avg_kw, kwh_per_day, share for configured windows using average-day profile.
-
-    windows: list of { key, start, end } in HH:MM.
-    """
+    """Compute avg_kw, kwh_per_day, share for configured windows using average-day profile."""
     total = (
         float(total_daily_kwh)
         if total_daily_kwh is not None
         else float(profile_with_import["import_total"].sum())
     )
-    # Pre-parse the slot column to time objects once (used for every window mask).
-    slot_times = profile_with_import["slot"].apply(utils.parse_time_str)
+    slot_times_py = [utils.parse_time_str(str(s)) for s in profile_with_import["slot"].to_list()]
     out: dict[str, dict[str, float]] = {}
     for w in windows:
         start_t = utils.parse_time_str(str(w["start"]))
         end_t = utils.parse_time_str(str(w["end"]))
-        mask = utils.time_in_range(slot_times, start_t, end_t)
-        window_kwh = float(profile_with_import.loc[mask, "import_total"].sum())
+        mask_np = np.array(
+            [
+                (
+                    (t >= start_t and t < end_t)
+                    if start_t < end_t
+                    else (t >= start_t or t < end_t)
+                )
+                for t in slot_times_py
+            ]
+        )
+        window_kwh = float(profile_with_import.filter(pl.Series(mask_np))["import_total"].sum())
         start_m = start_t.hour * 60 + start_t.minute
         end_m = end_t.hour * 60 + end_t.minute
-        # parse_time_str("24:00") returns time(0,0); map end_m=0 to 1440 for duration math
         if end_m == 0:
             end_m = 24 * 60
         window_hours = (
@@ -307,15 +337,15 @@ def window_stats_from_profile(
 
 
 def peak_from_profile(
-    profile_with_import: pd.DataFrame, cadence_min: int
+    profile_with_import: pl.DataFrame, cadence_min: int
 ) -> tuple[float, Optional[str]]:
     """Peak kW and time from average-day profile import_total."""
-    if profile_with_import.empty:
+    if profile_with_import.is_empty():
         return 0.0, None
     peak_interval_kwh = float(profile_with_import["import_total"].max())
     peak_kw = peak_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
     idx = int(profile_with_import["import_total"].to_numpy().argmax())
-    t = str(profile_with_import.iloc[idx]["slot"]) if idx >= 0 else None
+    t = str(profile_with_import["slot"][idx]) if idx >= 0 else None
     return float(peak_kw), t
 
 
@@ -329,29 +359,26 @@ def profile(
     slot_fmt: str = "%H:%M",
     include_import_total: bool = True,
     import_flows: Iterable[str] | None = None,
-) -> pd.DataFrame:
-    """Generic profile builder. Currently supports average-day by 30-min slot.
-
-    - by="slot": groups by formatted local time of day (e.g., HH:MM) and aggregates per `reducer`.
-    - pivot_by: column used to pivot (default flow).
-    - include_import_total: adds import_total column by summing import flows.
-    """
+) -> pl.DataFrame:
+    """Generic profile builder. Currently supports average-day by 30-min slot."""
     if by != "slot":
         raise NotImplementedError("profile currently supports by='slot' only")
-    s = df.copy()
+
+    s = df
     if flows:
-        s = s[s["flow"].isin(list(flows))]
-    # Index is expected tz-aware canonical; using index directly preserves local tz
-    s["slot"] = pd.DatetimeIndex(s.index).strftime(slot_fmt)
-    g = s.groupby(["slot", pivot_by])
-    if reducer == "mean":
-        prof = g["kwh"].mean().unstack(pivot_by).fillna(0.0).reset_index()
-    elif reducer == "sum":
-        prof = g["kwh"].sum().unstack(pivot_by).fillna(0.0).reset_index()
-    elif reducer == "max":
-        prof = g["kwh"].max().unstack(pivot_by).fillna(0.0).reset_index()
-    else:
-        raise ValueError(f"Unsupported reducer: {reducer}")
+        s = s.filter(pl.col("flow").is_in(list(flows)))
+
+    s = s.with_columns(pl.col("t_start").dt.strftime(slot_fmt).alias("slot"))
+
+    agg_expr = (
+        pl.col("kwh").mean() if reducer == "mean"
+        else (pl.col("kwh").sum() if reducer == "sum" else pl.col("kwh").max())
+    )
+    grouped = s.group_by(["slot", pivot_by]).agg(agg_expr)
+    prof = grouped.pivot(
+        index="slot", on=pivot_by, values="kwh", aggregate_function="first"
+    ).fill_null(0.0).sort("slot")
+
     if include_import_total:
         flow_cols = [c for c in prof.columns if c != "slot"]
         if import_flows:
@@ -360,7 +387,11 @@ def profile(
             cols = [c for c in flow_cols if "import" in str(c)]
             if not cols:
                 cols = flow_cols
-        prof["import_total"] = prof[cols].select_dtypes(float).sum(axis=1)
+        float_cols = [c for c in cols if prof[c].dtype in (pl.Float64, pl.Float32, pl.Int32, pl.Int64)]
+        prof = prof.with_columns(
+            pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("import_total")
+        )
+
     return prof
 
 
@@ -371,40 +402,59 @@ def period_breakdown(
     flows: Iterable[str] | None = None,
     cadence_min: int | None = None,
     labels: Literal["day", "month"] | None = None,
-) -> dict[str, pd.DataFrame]:
-    """Compute core per-period tables in one call: total, peaks, avg_interval_kwh.
+) -> dict[str, pl.DataFrame]:
+    """Compute core per-period tables: total, peaks, avg_interval_kwh.
 
     Returns a dict with keys: total, peaks, average. Label column is 'day' or 'month'.
     """
     if labels is None:
         labels = "day" if freq == "1D" else "month"
 
-    totals = aggregate(
-        df, freq=freq, groupby="flow", pivot=True, value_col="kwh", flows=flows
-    ).reset_index()
-    totals = totals.rename(columns={"t_start": labels})
-    totals[labels] = utils.format_period_label(totals[labels], freq)
-    flow_cols = [c for c in totals.columns if c != labels]
-    totals["total_kwh"] = totals[flow_cols].select_dtypes(float).sum(axis=1)
+    label_fmt = "%Y-%m-%d" if freq == "1D" else "%Y-%m"
 
-    peaks = aggregate(df, freq=freq, value_col="kwh", agg="max", flows=flows).reset_index()
-    peaks = peaks.rename(columns={"t_start": labels, "kwh": "peak_interval_kwh"})
-    peaks[labels] = utils.format_period_label(peaks[labels], freq)
-
-    avg = aggregate(df, freq=freq, metric="kW", stat="mean", flows=flows).reset_index()
-    avg = avg.rename(columns={"t_start": labels, "demand_kw": "mean_kw"})
-    avg[labels] = utils.format_period_label(avg[labels], freq)
-    if cadence_min:
-        avg["avg_interval_kwh"] = avg["mean_kw"] * (cadence_min / 60.0)
+    totals = aggregate(df, freq=freq, groupby="flow", pivot=True, value_col="kwh", flows=flows)
+    if "t_start" in totals.columns:
+        totals = totals.rename({"t_start": labels}).with_columns(
+            pl.col(labels).dt.strftime(label_fmt).alias(labels)
+        )
+        flow_cols = [c for c in totals.columns if c != labels]
+        float_cols = [c for c in flow_cols if totals[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+        totals = totals.with_columns(
+            pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("total_kwh")
+        )
     else:
-        avg["avg_interval_kwh"] = 0.0
-    avg = avg[[labels, "avg_interval_kwh"]]
+        totals = pl.DataFrame({labels: pl.Series([], dtype=pl.String)})
 
-    return {"total": totals, "peaks": peaks, "average": avg}
+    peaks = aggregate(df, freq=freq, value_col="kwh", agg="max", flows=flows)
+    if "t_start" in peaks.columns:
+        peaks = peaks.rename({"t_start": labels, "kwh": "peak_interval_kwh"}).with_columns(
+            pl.col(labels).dt.strftime(label_fmt).alias(labels)
+        )
+    else:
+        peaks = pl.DataFrame({labels: pl.Series([], dtype=pl.String), "peak_interval_kwh": []})
+
+    avg_df = aggregate(df, freq=freq, metric="kW", stat="mean", flows=flows)
+    if "t_start" in avg_df.columns:
+        avg_df = avg_df.rename({"t_start": labels, "demand_kw": "mean_kw"}).with_columns(
+            pl.col(labels).dt.strftime(label_fmt).alias(labels)
+        )
+        if cadence_min:
+            avg_df = avg_df.with_columns(
+                (pl.col("mean_kw") * (cadence_min / 60.0)).alias("avg_interval_kwh")
+            )
+        else:
+            avg_df = avg_df.with_columns(pl.lit(0.0).alias("avg_interval_kwh"))
+        avg_df = avg_df.select([labels, "avg_interval_kwh"])
+    else:
+        avg_df = pl.DataFrame(
+            {labels: pl.Series([], dtype=pl.String), "avg_interval_kwh": []}
+        )
+
+    return {"total": totals, "peaks": peaks, "average": avg_df}
 
 
 def top_n_from_profile(
-    profile_df: pd.DataFrame,
+    profile_df: pl.DataFrame,
     *,
     group_by: Literal["hour"] = "hour",
     slot_col: str = "slot",
@@ -418,16 +468,20 @@ def top_n_from_profile(
     """
     if group_by != "hour":
         raise NotImplementedError("Only group_by='hour' supported")
-    if profile_df.empty:
+    if profile_df.is_empty():
         return {"labels": [], "value_total": 0.0, "share_pct": 0.0}
+
     grouped = (
-        profile_df.assign(_h=profile_df[slot_col].astype(str).str.slice(0, 2))
-        .groupby("_h")[value_col]
-        .sum()
-        .sort_values(ascending=False)
+        profile_df.with_columns(
+            pl.col(slot_col).cast(pl.String).str.slice(0, 2).alias("_h")
+        )
+        .group_by("_h")
+        .agg(pl.col(value_col).sum())
+        .sort(value_col, descending=True)
     )
-    labels = list(grouped.head(n).index)
-    value_total = float(grouped.head(n).sum())
+    top = grouped.head(n)
+    labels = top["_h"].to_list()
+    value_total = float(top[value_col].sum())
     denom = float(total_value) if total_value is not None else float(profile_df[value_col].sum())
     share = (value_total / denom * 100.0) if denom > 0 else 0.0
     return {"labels": labels, "value_total": value_total, "share_pct": float(share)}

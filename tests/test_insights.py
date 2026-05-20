@@ -1,12 +1,8 @@
-"""Tests for insights evaluators (intermediate and advanced).
+"""Tests for insights evaluators (intermediate and advanced)."""
 
-Covers the two evaluators refactored to use transform.aggregate:
-  - peak_demand_characteristics  (evaluators_intermediate)
-  - step_change_baseload         (evaluators_advanced)
-"""
-
+import datetime as _dt
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from meterdatalogic import ingest
 from meterdatalogic.analytics.insights import InsightConfig
@@ -15,11 +11,25 @@ from meterdatalogic.analytics.insights import evaluators_intermediate, evaluator
 TZ = "Australia/Brisbane"
 
 
-def _import_df(rng, kwh=0.5) -> pd.DataFrame:
-    """Build a minimal canonical import-only DataFrame."""
-    return pd.DataFrame(
-        {"t_start": rng, "nmi": "Q1234567890", "channel": "E1", "kwh": kwh}
-    ).set_index("t_start")
+def _ts_range(start: str, periods: int, freq_min: int) -> pl.Series:
+    base = _dt.datetime.fromisoformat(start)
+    times = [base + _dt.timedelta(minutes=freq_min * i) for i in range(periods)]
+    return pl.Series(times, dtype=pl.Datetime("us")).dt.replace_time_zone(TZ)
+
+
+def _import_df(ts: pl.Series, kwh=0.5) -> pl.DataFrame:
+    n = len(ts)
+    kwh_vals = [float(kwh)] * n if not hasattr(kwh, "__len__") else [float(v) for v in kwh]
+    return pl.DataFrame(
+        {
+            "t_start": ts,
+            "nmi": pl.Series(["Q1234567890"] * n),
+            "channel": pl.Series(["E1"] * n),
+            "flow": pl.Series(["grid_import"] * n),
+            "kwh": pl.Series(kwh_vals, dtype=pl.Float64),
+            "cadence_min": pl.Series([30] * n, dtype=pl.Int32),
+        }
+    )
 
 
 # ------------------------------------------------------------------
@@ -28,44 +38,37 @@ def _import_df(rng, kwh=0.5) -> pd.DataFrame:
 
 
 def test_peak_demand_characteristics_returns_none_on_empty():
-    """Empty frame returns None immediately."""
-    df = ingest.from_dataframe(
-        pd.DataFrame(columns=["nmi", "channel", "kwh"]).set_index(
-            pd.DatetimeIndex([], name="t_start", tz=TZ)
-        )
-    )
+    from meterdatalogic import utils
+    df = utils.empty_canon_frame(tz=TZ)
     assert evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig()) is None
 
 
 def test_peak_demand_characteristics_returns_none_if_too_short():
-    """Fewer than 7 days → returns None (not enough data for reliable p95)."""
-    rng = pd.date_range("2025-01-01", periods=48 * 3, freq="30min", tz=TZ)
-    df = ingest.from_dataframe(_import_df(rng))
+    ts = _ts_range("2025-01-01T00:00:00", 48 * 3, 30)
+    df = ingest.from_dataframe(_import_df(ts))
     assert evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig()) is None
 
 
 def test_peak_demand_characteristics_returns_insight_with_14_days():
-    """14 days of uniform import produces a stable-demand insight with valid metrics."""
-    rng = pd.date_range("2025-01-01", periods=48 * 14, freq="30min", tz=TZ)
-    df = ingest.from_dataframe(_import_df(rng, kwh=0.5))
+    ts = _ts_range("2025-01-01T00:00:00", 48 * 14, 30)
+    df = ingest.from_dataframe(_import_df(ts, kwh=0.5))
     result = evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig())
     assert result is not None
     assert result.id == "peak_demand_characteristics"
     assert result.metrics["mean_peak_kw"] > 0
     assert result.metrics["p95_peak_kw"] >= result.metrics["mean_peak_kw"]
-    # Uniform load → p95 == mean → spiky_ratio == 1.0 → "info" severity
     assert result.severity == "info"
 
 
 def test_peak_demand_characteristics_spiky_data_triggers_warning():
-    """A single very-high-demand day inflates p95 well above mean → warning."""
-    rng = pd.date_range("2025-01-01", periods=48 * 14, freq="30min", tz=TZ)
-    kwh = np.full(len(rng), 0.2)
-    # Spike one day during the demand window
-    for i, ts in enumerate(rng):
-        if ts.date() == pd.Timestamp("2025-01-04").date() and 16 <= ts.hour < 21:
-            kwh[i] = 5.0
-    df = ingest.from_dataframe(_import_df(rng, kwh=kwh))
+    ts = _ts_range("2025-01-01T00:00:00", 48 * 14, 30)
+    kwh_arr = np.full(len(ts), 0.2)
+    ts_list = ts.to_list()
+    spike_date = _dt.date(2025, 1, 4)
+    for i, t in enumerate(ts_list):
+        if t.date() == spike_date and 16 <= t.hour < 21:
+            kwh_arr[i] = 5.0
+    df = ingest.from_dataframe(_import_df(ts, kwh=kwh_arr))
     result = evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig())
     assert result is not None
     assert result.severity == "warning"
@@ -78,52 +81,42 @@ def test_peak_demand_characteristics_spiky_data_triggers_warning():
 
 
 def test_step_change_baseload_returns_none_on_empty():
-    """Empty frame returns None immediately."""
-    df = ingest.from_dataframe(
-        pd.DataFrame(columns=["nmi", "channel", "kwh"]).set_index(
-            pd.DatetimeIndex([], name="t_start", tz=TZ)
-        )
-    )
+    from meterdatalogic import utils
+    df = utils.empty_canon_frame(tz=TZ)
     assert evaluators_advanced.step_change_baseload(df, config=InsightConfig()) is None
 
 
 def test_step_change_baseload_returns_none_if_too_short():
-    """Fewer than 30 days → returns None before even aggregating."""
-    rng = pd.date_range("2025-01-01", periods=48 * 20, freq="30min", tz=TZ)
-    df = ingest.from_dataframe(_import_df(rng))
+    ts = _ts_range("2025-01-01T00:00:00", 48 * 20, 30)
+    df = ingest.from_dataframe(_import_df(ts))
     assert evaluators_advanced.step_change_baseload(df, config=InsightConfig()) is None
 
 
 def test_step_change_baseload_no_insight_on_uniform_data():
-    """60 days of uniform overnight load → no step change detected."""
-    rng = pd.date_range("2025-01-01", periods=48 * 60, freq="30min", tz=TZ)
-    df = ingest.from_dataframe(_import_df(rng, kwh=0.4))
+    ts = _ts_range("2025-01-01T00:00:00", 48 * 60, 30)
+    df = ingest.from_dataframe(_import_df(ts, kwh=0.4))
     result = evaluators_advanced.step_change_baseload(df, config=InsightConfig())
     assert result is None
 
 
 def test_step_change_baseload_detects_step_up():
-    """Overnight usage doubling in the second half triggers an insight."""
-    # First 30 days at low usage, last 30 days at high usage.
-    rng_low = pd.date_range("2025-01-01", periods=48 * 30, freq="30min", tz=TZ)
-    rng_high = pd.date_range("2025-02-01", periods=48 * 30, freq="30min", tz=TZ)
-    df_low = _import_df(rng_low, kwh=0.2)
-    df_high = _import_df(rng_high, kwh=0.6)
-    df = ingest.from_dataframe(pd.concat([df_low, df_high]))
+    ts_low = _ts_range("2025-01-01T00:00:00", 48 * 30, 30)
+    ts_high = _ts_range("2025-02-01T00:00:00", 48 * 30, 30)
+    df_low = _import_df(ts_low, kwh=0.2)
+    df_high = _import_df(ts_high, kwh=0.6)
+    df = ingest.from_dataframe(pl.concat([df_low, df_high]).sort("t_start"))
     result = evaluators_advanced.step_change_baseload(df, config=InsightConfig())
     assert result is not None
     assert result.id == "step_change_baseload"
-    # Overnight sum: before = 10 × 0.2 = 2.0, after = 10 × 0.6 = 6.0 → ~66% change
     assert result.metrics["change_pct"] >= InsightConfig().advanced.step_change_pct_threshold
 
 
 def test_step_change_baseload_detects_step_down():
-    """A sustained decrease also triggers the insight."""
-    rng_high = pd.date_range("2025-01-01", periods=48 * 30, freq="30min", tz=TZ)
-    rng_low = pd.date_range("2025-02-01", periods=48 * 30, freq="30min", tz=TZ)
-    df_high = _import_df(rng_high, kwh=0.6)
-    df_low = _import_df(rng_low, kwh=0.2)
-    df = ingest.from_dataframe(pd.concat([df_high, df_low]))
+    ts_high = _ts_range("2025-01-01T00:00:00", 48 * 30, 30)
+    ts_low = _ts_range("2025-02-01T00:00:00", 48 * 30, 30)
+    df_high = _import_df(ts_high, kwh=0.6)
+    df_low = _import_df(ts_low, kwh=0.2)
+    df = ingest.from_dataframe(pl.concat([df_high, df_low]).sort("t_start"))
     result = evaluators_advanced.step_change_baseload(df, config=InsightConfig())
     assert result is not None
     assert "decrease" in result.message
