@@ -16,6 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 -
 
+## [0.5.0] - 2026-05-20
+
+### Changed
+- **Core migration to Polars**: replaced `pandas` with `polars` as the core DataFrame library, aligning with `nemreader` 1.0.0 which dropped pandas in favour of polars
+- `CanonFrame` is now `pl.DataFrame`; `t_start` is a regular column rather than a `DatetimeIndex`
+- `from_nem12` updated for `nemreader` 1.0.0 API (`get_data_frame_long` → native `pl.DataFrame`)
+- `group_by_dynamic` replaces `resample`; `pivot` replaces `unstack`
+- Removed `numpy` dependency entirely — all array operations now use native polars `Series` methods (`.slice`, `.mean`, etc.)
+- `requires-python` bumped to `>=3.12`; `pandas` dependency removed
+
+### Fixed
+- Weekday convention corrected for polars ISO format (Mon=1, Sun=7)
+- `Int32` overflow in `_seconds_since_midnight`
+- `series_equal` renamed to `equals`; `quantile` updated with `interpolation='linear'`
+- Unused imports removed across `pricing.py`, `summary.py`, `transform.py`, and test files
+
 ## [0.4.0] - 2026-05-20
 
 ### Fixed
