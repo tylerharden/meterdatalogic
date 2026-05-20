@@ -2,7 +2,7 @@ from __future__ import annotations
 import polars as pl
 from typing import Literal, Iterable, Optional, Sequence
 
-from . import utils, canon
+from . import utils
 from .types import CanonFrame
 
 

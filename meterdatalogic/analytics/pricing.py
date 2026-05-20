@@ -3,7 +3,7 @@ import bisect
 import polars as pl
 from typing import Iterable, Tuple, Literal, Optional
 
-from ..core import transform, utils
+from ..core import transform
 from ..core.types import CanonFrame
 from ..analytics.types import Plan
 

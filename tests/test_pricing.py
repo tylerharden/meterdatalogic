@@ -2,7 +2,6 @@
 
 import datetime as _dt
 import polars as pl
-import pytest
 
 from meterdatalogic import pricing, utils, ingest
 import meterdatalogic.types as mdtypes

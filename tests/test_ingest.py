@@ -2,9 +2,8 @@
 
 import datetime as _dt
 import polars as pl
-import pytest
 
-from meterdatalogic import ingest, validate, canon
+from meterdatalogic import ingest, validate
 
 TZ = "Australia/Brisbane"
 
