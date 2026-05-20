@@ -8,13 +8,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- 
+-
 
 ### Changed
 -
 
 ### Fixed
 -
+
+## [0.4.0] - 2026-05-20
+
+### Fixed
+- **Battery scenario**: rewrote dispatch to a net-metering model (`net = import − export + EV − PV`) — prevents simultaneous import and export in the same interval, which was inflating self-consumption figures
+- **EV charging with wrap-around windows** (e.g. 18:00–07:00): positions were sorted by calendar time (midnight first) so charging began at 00:00 instead of the window start; positions are now re-sorted from `window_start`
+- **`scenario.run()`**: used a non-unique `DatetimeIndex` for baseline import/export series when multi-flow data had duplicate timestamps, causing incorrect totals — fixed with `.unique()`
+- **`data_completeness` insight**: coverage percentage was computed against a raw (potentially duplicated) index; now uses `idx.unique()` for accurate interval counts
+- **`seasonal_variation` insight**: flow column selection now prefers columns containing `"import"` before falling back to all non-reserved columns, avoiding accidental inclusion of export or metadata columns
+
+### Changed
+- `peak_demand_characteristics` and `step_change_baseload` insight evaluators now delegate time-window filtering and kWh→kW conversion to `transform.aggregate`, removing inline duplication
+- `core/utils.py`: consolidated time-parsing, window-filtering, and kW-conversion helpers
+- Docstrings condensed throughout for brevity; ruff formatting applied across the codebase
+
+### Tests
+- Added `tests/test_insights.py` with evaluator unit tests across basic, intermediate, and advanced insights
+- Expanded `tests/test_scenarios.py` with 700+ lines of regression tests covering EV wrap-around windows, battery net-metering, and multi-flow edge cases
+- Expanded `tests/test_summary.py`, `tests/test_pricing.py`, and `tests/test_transform.py`
+
+## [0.3.0] - 2026-02-07
+
+### Added
+- **Seasonal aggregation**: `summarise()` now returns a `seasonal` breakdown in its output
+- `transform.aggregate` supports `groupby="season"` with a `hemisphere` parameter (`"southern"` / `"northern"`) for season-aware grouping
+
+## [0.2.1] - 2026-02-07
+
+### Changed
+- Public API in `__init__.py` streamlined for backwards compatibility — top-level imports re-exported to match pre-refactor usage patterns
+- Updated README and `docs/api-reference.md` with revised usage examples
+
+### Fixed
+- Tests updated to use the new domain-structured imports
+
+## [0.2.0] - 2026-02-07
+
+### Changed
+- **Major refactor**: flat module structure reorganised into domain packages — `analytics/` (insights, pricing, scenario, summary), `core/` (transform, utils, types), `io/` (ingest, validate, formats)
+- Shared types split into `analytics/types.py`, `core/types.py`, and `io/types.py`
+- Added `py.typed` marker for PEP 561 type-checking support
+- Added type annotations for `LogicalDay` and `LogicalSeries`
+
+## [0.3.0] - 2026-02-07
+
+### Added
+- Seasonal aggregation support in `summarise()` — results now include a `seasonal` breakdown (Summer/Autumn/Winter/Spring) in addition to monthly and daily profiles
+- `transform.aggregate()` extended to support `groupby="season"` with hemisphere-aware season mapping
+- `analytics/types.py` updated with seasonal summary types
+
+## [0.2.1] - 2026-02-07
+
+### Changed
+- Updated public API in `__init__.py` for backwards compatibility after the v0.2.0 domain restructure
+- Updated README and `docs/api-reference.md` with corrected import paths and usage examples
+
+## [0.2.0] - 2026-02-07
+
+### Added
+- `py.typed` marker — package now ships type information for downstream type checkers
+- Type annotations for `LogicalDay` and `LogicalSeries` in `core/types.py`
+- New `analytics/types.py` with return-type models for summary, pricing, and scenario outputs
+- New `io/types.py` with ingestion and validation types
+
+### Changed
+- **Breaking**: restructured from flat layout to domain packages — `analytics/` (insights, pricing, scenario, summary), `core/` (transform, utils, types), `io/` (ingest, validate, formats). Update imports accordingly.
+- `meterdatalogic/types.py` consolidated; domain-specific types moved to their respective packages
 
 ## [0.1.7] - 2026-02-06
 
