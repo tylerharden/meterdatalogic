@@ -95,12 +95,12 @@ def test_import_only_has_zero_solar_export(canon_df_one_nmi):
 
 def test_solar_export_tracked_separately_from_import():
     all_ts = _ts_range("2025-01-01T00:00:00", 48, 30)
-    hours = all_ts.dt.hour().to_numpy()
-    night_mask = ~((hours >= 8) & (hours < 16))
+    hours = all_ts.dt.hour()
     day_mask = (hours >= 8) & (hours < 16)
+    night_mask = ~day_mask
 
-    night_ts = all_ts.filter(pl.Series(night_mask.tolist()))
-    day_ts = all_ts.filter(pl.Series(day_mask.tolist()))
+    night_ts = all_ts.filter(night_mask)
+    day_ts = all_ts.filter(day_mask)
 
     n_night = len(night_ts)
     n_day = len(day_ts)

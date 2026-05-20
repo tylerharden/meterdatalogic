@@ -1,5 +1,4 @@
 from __future__ import annotations
-import numpy as np
 import polars as pl
 from typing import Literal, Iterable, Optional, Sequence
 
@@ -72,13 +71,15 @@ def _time_window_mask(
 
 def _assign_time_bands(t_start: pl.Series, bands: Iterable[dict]) -> pl.Series:
     """Assign each timestamp to a named band. Unmatched slots → 'unassigned'."""
-    result = np.array(["unassigned"] * len(t_start), dtype=object)
+    result = ["unassigned"] * len(t_start)
     for band in bands:
         start_t = utils.parse_time_str(str(band["start"]))
         end_t = utils.parse_time_str(str(band["end"]))
-        mask = utils.time_in_range(t_start, start_t, end_t).to_numpy()
-        result[mask] = str(band["name"])
-    return pl.Series(result.tolist(), dtype=pl.String)
+        name = str(band["name"])
+        for i, m in enumerate(utils.time_in_range(t_start, start_t, end_t).to_list()):
+            if m:
+                result[i] = name
+    return pl.Series(result, dtype=pl.String)
 
 
 def _compute_power_from_energy(df: pl.DataFrame, *, energy_col: str = "kwh") -> pl.Series:
@@ -308,17 +309,11 @@ def window_stats_from_profile(
     for w in windows:
         start_t = utils.parse_time_str(str(w["start"]))
         end_t = utils.parse_time_str(str(w["end"]))
-        mask_np = np.array(
-            [
-                (
-                    (t >= start_t and t < end_t)
-                    if start_t < end_t
-                    else (t >= start_t or t < end_t)
-                )
-                for t in slot_times_py
-            ]
-        )
-        window_kwh = float(profile_with_import.filter(pl.Series(mask_np))["import_total"].sum())
+        mask = [
+            (t >= start_t and t < end_t) if start_t < end_t else (t >= start_t or t < end_t)
+            for t in slot_times_py
+        ]
+        window_kwh = float(profile_with_import.filter(pl.Series(mask))["import_total"].sum())
         start_m = start_t.hour * 60 + start_t.minute
         end_m = end_t.hour * 60 + end_t.minute
         if end_m == 0:
@@ -344,7 +339,7 @@ def peak_from_profile(
         return 0.0, None
     peak_interval_kwh = float(profile_with_import["import_total"].max())
     peak_kw = peak_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
-    idx = int(profile_with_import["import_total"].to_numpy().argmax())
+    idx = int(profile_with_import["import_total"].arg_max())
     t = str(profile_with_import["slot"][idx]) if idx >= 0 else None
     return float(peak_kw), t
 

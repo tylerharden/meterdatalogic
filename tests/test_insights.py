@@ -1,7 +1,6 @@
 """Tests for insights evaluators (intermediate and advanced)."""
 
 import datetime as _dt
-import numpy as np
 import polars as pl
 
 from meterdatalogic import ingest
@@ -62,12 +61,12 @@ def test_peak_demand_characteristics_returns_insight_with_14_days():
 
 def test_peak_demand_characteristics_spiky_data_triggers_warning():
     ts = _ts_range("2025-01-01T00:00:00", 48 * 14, 30)
-    kwh_arr = np.full(len(ts), 0.2)
     ts_list = ts.to_list()
     spike_date = _dt.date(2025, 1, 4)
-    for i, t in enumerate(ts_list):
-        if t.date() == spike_date and 16 <= t.hour < 21:
-            kwh_arr[i] = 5.0
+    kwh_arr = [
+        5.0 if t.date() == spike_date and 16 <= t.hour < 21 else 0.2
+        for t in ts_list
+    ]
     df = ingest.from_dataframe(_import_df(ts, kwh=kwh_arr))
     result = evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig())
     assert result is not None

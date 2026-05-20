@@ -109,6 +109,8 @@ def from_logical(obj: LogicalCanon) -> CanonFrame:
             import datetime as _dt
             if isinstance(date_val, _dt.datetime):
                 day_start = date_val.replace(tzinfo=None)
+            elif isinstance(date_val, str):
+                day_start = _dt.datetime.fromisoformat(date_val.strip())
             else:
                 day_start = _dt.datetime(date_val.year, date_val.month, date_val.day)
 

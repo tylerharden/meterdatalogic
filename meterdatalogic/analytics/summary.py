@@ -30,7 +30,7 @@ def summarise(
     per_day_avg = (total_import_kwh / days) if days else 0.0
 
     if len(df):
-        pos = int(df["kwh"].to_numpy().argmax())
+        pos = int(df["kwh"].arg_max())
         max_interval_kwh = float(df["kwh"][pos])
         max_interval_time = str(df["t_start"][pos])
     else:

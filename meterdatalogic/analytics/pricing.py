@@ -1,5 +1,5 @@
 from __future__ import annotations
-import numpy as np
+import bisect
 import polars as pl
 from typing import Iterable, Tuple, Literal, Optional
 
@@ -44,23 +44,22 @@ def _label_cycles(
         labels.append(f"{s_pl}→{e_pl}")
 
     # Sort by start
-    order = np.argsort([s.timestamp() for s in starts_dt])
-    starts_sorted = [starts_dt[i] for i in order]
-    ends_sorted = [ends_dt[i] for i in order]
-    labels_sorted = [labels[i] for i in order]
+    sorted_triples = sorted(zip(starts_dt, ends_dt, labels), key=lambda x: x[0].timestamp())
+    starts_sorted = [x[0] for x in sorted_triples]
+    ends_sorted = [x[1] for x in sorted_triples]
+    labels_sorted = [x[2] for x in sorted_triples]
 
-    starts_ns = np.array([int(s.timestamp() * 1e9) for s in starts_sorted])
-    ends_ns = np.array([int(e.timestamp() * 1e9) for e in ends_sorted])
+    starts_ns = [int(s.timestamp() * 1e9) for s in starts_sorted]
+    ends_ns = [int(e.timestamp() * 1e9) for e in ends_sorted]
 
-    # Convert t_start to UTC nanoseconds for searchsorted
-    ts_ns = (t_start.dt.convert_time_zone("UTC").dt.epoch(time_unit="ns").to_numpy())
+    ts_ns_list = t_start.dt.convert_time_zone("UTC").dt.epoch(time_unit="ns").to_list()
 
-    idx = np.searchsorted(starts_ns, ts_ns, side="right") - 1
-    valid = (idx >= 0) & (ts_ns < ends_ns[np.clip(idx, 0, len(ends_ns) - 1)])
-
-    result = np.array([None] * len(t_start), dtype=object)
-    result[valid] = np.array(labels_sorted, dtype=object)[idx[valid]]
-    return pl.Series(result.tolist(), dtype=pl.String)
+    result: list[str | None] = [None] * len(ts_ns_list)
+    for i, ts_ns in enumerate(ts_ns_list):
+        idx = bisect.bisect_right(starts_ns, ts_ns) - 1
+        if idx >= 0 and ts_ns < ends_ns[idx]:
+            result[i] = labels_sorted[idx]
+    return pl.Series(result, dtype=pl.String)
 
 
 def _cycle_billables(

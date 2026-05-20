@@ -1,7 +1,6 @@
 """Pricing tests exercising monthly billables merge and cost math."""
 
 import datetime as _dt
-import numpy as np
 import polars as pl
 import pytest
 
@@ -22,7 +21,7 @@ def _mk_io_week(halfhour_rng: pl.Series) -> pl.DataFrame:
     n = len(halfhour_rng)
     imp = utils.build_canon_frame(
         halfhour_rng,
-        np.ones(n) * 0.5,
+        [0.5] * n,
         nmi="Q123",
         channel="E1",
         flow="grid_import",
@@ -31,7 +30,7 @@ def _mk_io_week(halfhour_rng: pl.Series) -> pl.DataFrame:
     export_idx = halfhour_rng.gather(list(range(0, n, 4)))
     exp = utils.build_canon_frame(
         export_idx,
-        np.ones(len(export_idx)) * 0.25,
+        [0.25] * len(export_idx),
         nmi="Q123",
         channel="B1",
         flow="grid_export_solar",
@@ -48,7 +47,7 @@ def test_no_demand_no_export(halfhour_rng, monkeypatch):
     """If there is no demand and no export, only energy_cost should be > 0."""
     df = utils.build_canon_frame(
         halfhour_rng,
-        np.ones(len(halfhour_rng)) * 0.5,
+        [0.5] * len(halfhour_rng),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -131,7 +130,7 @@ def test_compute_billables_optional_flows(halfhour_rng):
     """include_controlled_load and include_total_import add expected columns."""
     import_df = utils.build_canon_frame(
         halfhour_rng,
-        np.ones(len(halfhour_rng)) * 0.5,
+        [0.5] * len(halfhour_rng),
         nmi="Q123",
         channel="E1",
         flow="grid_import",
@@ -141,7 +140,7 @@ def test_compute_billables_optional_flows(halfhour_rng):
     cl_series = halfhour_rng.gather(list(range(0, len(halfhour_rng), 2)))
     cl_df = utils.build_canon_frame(
         cl_series,
-        np.ones(n_cl) * 0.3,
+        [0.3] * n_cl,
         nmi="Q123",
         channel="E2",
         flow="controlled_load_import",
@@ -151,7 +150,7 @@ def test_compute_billables_optional_flows(halfhour_rng):
     exp_series = halfhour_rng.gather(list(range(0, len(halfhour_rng), 3)))
     export_df = utils.build_canon_frame(
         exp_series,
-        np.ones(n_exp) * 0.2,
+        [0.2] * n_exp,
         nmi="Q123",
         channel="B1",
         flow="grid_export_solar",

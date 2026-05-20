@@ -175,10 +175,10 @@ def step_change_baseload(
     if len(daily_df) < config.advanced.min_days_for_step_check:
         return None
 
-    vals = daily_df[col].cast(pl.Float64).to_numpy()
-    mid = len(vals) // 2
-    before = float(vals[:mid].mean()) if mid > 0 else 0.0
-    after_val = float(vals[mid:].mean()) if mid < len(vals) else 0.0
+    series = daily_df[col].cast(pl.Float64)
+    mid = len(series) // 2
+    before = float(series.slice(0, mid).mean() or 0.0) if mid > 0 else 0.0
+    after_val = float(series.slice(mid).mean() or 0.0) if mid < len(series) else 0.0
     bigger = max(before, after_val)
     smaller = min(before, after_val)
     change_pct = ((bigger - smaller) / bigger * 100.0) if bigger > 0 else 0.0

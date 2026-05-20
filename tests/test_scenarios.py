@@ -1,7 +1,6 @@
 """Scenario tests for EV, PV, battery, and the run() orchestrator."""
 
 import datetime as _dt
-import numpy as np
 import polars as pl
 import pytest
 
@@ -17,6 +16,12 @@ def _ts_range(start: str, periods: int, freq_min: int) -> pl.Series:
     return pl.Series(times, dtype=pl.Datetime("us")).dt.replace_time_zone(TZ)
 
 
+def _assert_allclose(actual: list[float], expected: list[float], atol: float = 1e-9) -> None:
+    assert len(actual) == len(expected), f"Length mismatch: {len(actual)} vs {len(expected)}"
+    for i, (a, e) in enumerate(zip(actual, expected)):
+        assert abs(a - e) <= atol, f"Mismatch at index {i}: got {a}, expected {e} (atol={atol})"
+
+
 @pytest.fixture
 def day_30min() -> pl.Series:
     """One local day at 30-min cadence (Brisbane, no DST)."""
@@ -28,7 +33,7 @@ def base_df(day_30min):
     """Canonical baseline: 0.5 kWh import per interval, single NMI/channel."""
     return utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.5),
+        [0.5] * len(day_30min),
         nmi="Q123",
         channel="E1",
         flow="grid_import",
@@ -36,32 +41,32 @@ def base_df(day_30min):
     )
 
 
-def _series_from_after(df_after: pl.DataFrame, idx: pl.Series, flow_name: str) -> np.ndarray:
-    """Rebuild a dense per-interval numpy array for a flow from sparse canonical rows."""
+def _series_from_after(df_after: pl.DataFrame, idx: pl.Series, flow_name: str) -> list[float]:
+    """Rebuild a dense per-interval list for a flow from sparse canonical rows."""
     n = len(idx)
     if df_after.is_empty():
-        return np.zeros(n, dtype=float)
+        return [0.0] * n
     subset = df_after.filter(pl.col("flow") == flow_name)
     if subset.is_empty():
-        return np.zeros(n, dtype=float)
+        return [0.0] * n
     grouped = subset.group_by("t_start").agg(pl.col("kwh").sum())
     full = (
         pl.DataFrame({"t_start": idx})
         .join(grouped, on="t_start", how="left")
         .with_columns(pl.col("kwh").fill_null(0.0))
     )
-    return full["kwh"].cast(pl.Float64).to_numpy()
+    return full["kwh"].cast(pl.Float64).to_list()
 
 
-def _flow_to_array(df: pl.DataFrame, idx: pl.Series, flow: str) -> np.ndarray:
-    """Dense per-interval array for a flow, reindexed to idx with 0.0 fill."""
+def _flow_to_array(df: pl.DataFrame, idx: pl.Series, flow: str) -> list[float]:
+    """Dense per-interval list for a flow, reindexed to idx with 0.0 fill."""
     subset = df.filter(pl.col("flow") == flow).group_by("t_start").agg(pl.col("kwh").sum())
     full = (
         pl.DataFrame({"t_start": idx})
         .join(subset, on="t_start", how="left")
         .with_columns(pl.col("kwh").fill_null(0.0))
     )
-    return full["kwh"].cast(pl.Float64).to_numpy()
+    return full["kwh"].cast(pl.Float64).to_list()
 
 
 def test_apply_ev_immediate_window_and_limits(day_30min):
@@ -80,11 +85,9 @@ def test_apply_ev_immediate_window_and_limits(day_30min):
     except NotImplementedError:
         pytest.xfail("_apply_ev not implemented")
 
-    assert isinstance(s, np.ndarray) and len(s) == len(idx)
-    in_win = utils.time_in_range(
-        idx, utils.parse_time_str("18:00"), utils.parse_time_str("22:00")
-    ).to_numpy()
-    assert (s[~in_win] == 0).all()
+    assert isinstance(s, pl.Series) and len(s) == len(idx)
+    in_win = utils.time_in_range(idx, utils.parse_time_str("18:00"), utils.parse_time_str("22:00"))
+    assert s.filter(~in_win).sum() == 0
     assert s.max() <= cfg.max_kw * 0.5 + 1e-9
     assert abs(s.sum() - cfg.daily_kwh) <= 0.5
 
@@ -102,18 +105,15 @@ def test_apply_ev_immediate_wraparound_window_starts_at_window_start():
     )
     s = scenario._apply_ev(idx, cfg, interval_h=0.5)
 
-    midnight_mask = utils.time_in_range(
-        idx, utils.parse_time_str("00:00"), utils.parse_time_str("07:00")
-    ).to_numpy()
-    evening_mask = utils.time_in_range(
-        idx, utils.parse_time_str("18:00"), utils.parse_time_str("00:00")
-    ).to_numpy()
+    midnight_mask = utils.time_in_range(idx, utils.parse_time_str("00:00"), utils.parse_time_str("07:00"))
+    evening_mask = utils.time_in_range(idx, utils.parse_time_str("18:00"), utils.parse_time_str("00:00"))
 
-    assert s[midnight_mask].sum() < 1e-9, (
-        f"EV charged {s[midnight_mask].sum():.3f} kWh at midnight — "
+    midnight_total = s.filter(midnight_mask).sum()
+    assert midnight_total < 1e-9, (
+        f"EV charged {midnight_total:.3f} kWh at midnight — "
         "window ordering bug: should start charging from 18:00, not 00:00"
     )
-    assert s[evening_mask].sum() > 0, "No EV charging found in evening window"
+    assert s.filter(evening_mask).sum() > 0, "No EV charging found in evening window"
     assert abs(s.sum() - 2 * 7.0) < 1e-6, f"Expected 14 kWh total for 2 days, got {s.sum()}"
 
 
@@ -125,8 +125,8 @@ def test_apply_pv_basic_contract(day_30min):
     except NotImplementedError:
         pytest.xfail("_apply_pv not implemented")
 
-    assert isinstance(s, np.ndarray) and len(s) == len(day_30min)
-    assert s.dtype.kind in "fc"
+    assert isinstance(s, pl.Series) and len(s) == len(day_30min)
+    assert s.dtype == pl.Float64
     assert (s >= -1e-12).all()
     assert s.max() <= cfg.inverter_kw * 0.5 + 1e-9
 
@@ -135,8 +135,8 @@ def test_battery_self_consume_contract():
     """Battery dispatch loop: shape, non-negative, per-interval cap, and SoC bounds."""
     n = 48
     interval_h = 0.5
-    import_prebat = np.full(n, 0.6)
-    pv_excess_prebat = np.where(np.arange(n) % 6 == 0, 0.4, 0.0)
+    import_prebat = [0.6] * n
+    pv_excess_prebat = [0.4 if i % 6 == 0 else 0.0 for i in range(n)]
     cfg = mdtypes.BatteryConfig(
         capacity_kwh=10.0, max_kw=5.0, round_trip_eff=0.9, soc_min=0.1, soc_max=0.95
     )
@@ -148,18 +148,18 @@ def test_battery_self_consume_contract():
     except NotImplementedError:
         pytest.xfail("_apply_battery_self_consume not implemented")
 
-    assert discharge.shape == charge.shape == soc.shape == (n,)
-    assert (discharge >= -1e-12).all() and (charge >= -1e-12).all()
+    assert len(discharge) == len(charge) == len(soc) == n
+    assert all(d >= -1e-12 for d in discharge) and all(c >= -1e-12 for c in charge)
     limit = cfg.max_kw * interval_h + 1e-9
-    assert (discharge <= limit).all() and (charge <= limit).all()
-    assert (soc >= -1e-9).all() and (soc <= cfg.capacity_kwh + 1e-9).all()
+    assert all(d <= limit for d in discharge) and all(c <= limit for c in charge)
+    assert all(s >= -1e-9 for s in soc) and all(s <= cfg.capacity_kwh + 1e-9 for s in soc)
 
 
 def test_run_wires_components_and_prices(day_30min, monkeypatch):
     """run() orchestration: df_before/df_after and cost frames are populated."""
     df_before = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.5),
+        [0.5] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -167,23 +167,20 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
     )
 
     n = len(day_30min)
-    ev_arr = np.zeros(n)
-    ev_arr[36:40] = 0.2
-    pv_arr = np.zeros(n)
-    pv_arr[22:26] = 0.3
+    ev_vals = [0.2 if 36 <= i < 40 else 0.0 for i in range(n)]
+    pv_vals = [0.3 if 22 <= i < 26 else 0.0 for i in range(n)]
 
     def fake_ev(idx, cfg, interval_h):
-        return ev_arr
+        return pl.Series(ev_vals, dtype=pl.Float64)
 
     def fake_pv(idx, cfg, interval_h):
-        return pv_arr
+        return pl.Series(pv_vals, dtype=pl.Float64)
 
     def fake_batt(import_prebat, pv_excess_prebat, cfg, interval_h):
         n_ = len(import_prebat)
-        dis = np.zeros(n_)
-        ch = np.zeros(n_)
-        soc = np.zeros(n_)
-        dis[30:32] = 0.1
+        dis = [0.1 if 30 <= i < 32 else 0.0 for i in range(n_)]
+        ch = [0.0] * n_
+        soc = [0.0] * n_
         return dis, ch, soc
 
     monkeypatch.setattr(scenario, "_apply_ev", fake_ev, raising=True)
@@ -234,16 +231,16 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
 @pytest.fixture
 def multi_flow_df(day_30min):
     """Canonical df with both grid_import and grid_export_solar rows."""
-    hours = day_30min.dt.hour().to_numpy()
-    night_mask = ~((hours >= 8) & (hours < 16))
-    day_mask_arr = (hours >= 8) & (hours < 16)
+    hours = day_30min.dt.hour().to_list()
+    night_mask = [not (8 <= h < 16) for h in hours]
+    day_mask_arr = [(8 <= h < 16) for h in hours]
 
-    night_ts = day_30min.filter(pl.Series(night_mask.tolist()))
-    day_ts = day_30min.filter(pl.Series(day_mask_arr.tolist()))
+    night_ts = day_30min.filter(pl.Series(night_mask))
+    day_ts = day_30min.filter(pl.Series(day_mask_arr))
 
     import_frame = utils.build_canon_frame(
         night_ts,
-        np.full(len(night_ts), 0.5),
+        [0.5] * len(night_ts),
         nmi="Q123",
         channel="E1",
         flow="grid_import",
@@ -251,7 +248,7 @@ def multi_flow_df(day_30min):
     )
     export_frame = utils.build_canon_frame(
         day_ts,
-        np.full(len(day_ts), 0.1),
+        [0.1] * len(day_ts),
         nmi="Q123",
         channel="B1",
         flow="grid_export_solar",
@@ -290,7 +287,7 @@ def test_battery_with_pv_reduces_import(day_30min):
     """A battery paired with PV should reduce grid import compared to PV alone."""
     base = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.5),
+        [0.5] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -312,7 +309,7 @@ def test_battery_only_does_not_increase_import(day_30min):
     """Battery without PV: after-import must equal before-import."""
     base = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.5),
+        [0.5] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -332,7 +329,7 @@ def test_battery_without_pv_is_strict_noop(day_30min):
     """Battery-only on import-only baseline (no existing solar) is a strict no-op."""
     base = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.5),
+        [0.5] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -358,7 +355,7 @@ def test_ev_mf_strategy_skips_weekends_and_hits_daily_target():
     idx = _ts_range("2025-01-06", 7 * 48, 30)  # Mon 2025-01-06 for 7 days
     base = utils.build_canon_frame(
         idx,
-        np.zeros(len(idx)),
+        [0.0] * len(idx),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -378,7 +375,6 @@ def test_ev_mf_strategy_skips_weekends_and_hits_daily_target():
     assert abs(result.explain["ev_kwh"] - (5 * ev_cfg.daily_kwh)) < 1e-6
 
     df_after = result.df_after
-    # weekday(): Mon=0 ... Sat=5, Sun=6
     weekend_kwh = float(df_after.filter(pl.col("t_start").dt.weekday() >= 6)["kwh"].sum())
     assert weekend_kwh < 1e-9
 
@@ -387,7 +383,7 @@ def test_run_energy_balance_invariant_with_ev_pv_battery(day_30min):
     """End-to-end conservation check for scenario.run."""
     base = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.8),
+        [0.8] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -427,7 +423,7 @@ def test_run_delta_matches_before_after_summaries(day_30min):
     """`result.delta` should be consistent with summary before/after totals."""
     base = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.6),
+        [0.6] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -452,9 +448,8 @@ def test_run_delta_matches_before_after_summaries(day_30min):
 def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
     """Regression: EV-only scenario (night charging) must not raise daytime profile24."""
     idx = _ts_range("2025-01-13", 2 * 48, 30)
-    kwh_vals = np.full(len(idx), 0.3)
-    hours = idx.dt.hour().to_numpy()
-    kwh_vals[(hours == 12) | (hours == 13)] = 0.0
+    hours = idx.dt.hour().to_list()
+    kwh_vals = [0.0 if h in (12, 13) else 0.3 for h in hours]
 
     n = len(idx)
     raw = pl.DataFrame(
@@ -463,7 +458,7 @@ def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
             "nmi": pl.Series(["Q"] * n),
             "channel": pl.Series(["E1"] * n),
             "flow": pl.Series(["grid_import"] * n),
-            "kwh": pl.Series(kwh_vals.tolist(), dtype=pl.Float64),
+            "kwh": pl.Series(kwh_vals, dtype=pl.Float64),
             "cadence_min": pl.Series([30] * n, dtype=pl.Int32),
         }
     )
@@ -494,7 +489,8 @@ def test_profile24_daytime_not_inflated_by_ev_only(day_30min):
 
 def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
     """Golden trace: EV-only run should equal baseline + EV profile at each slot."""
-    baseline = np.linspace(0.2, 0.8, len(day_30min), dtype=float)
+    n = len(day_30min)
+    baseline = [0.2 + (0.8 - 0.2) * i / (n - 1) for i in range(n)]
     base = utils.build_canon_frame(
         day_30min,
         baseline,
@@ -513,19 +509,19 @@ def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
     )
 
     result = scenario.run(base, ev=ev_cfg)
-    expected_ev = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5)
-    expected_import = baseline + expected_ev
+    expected_ev = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5).to_list()
+    expected_import = [b + e for b, e in zip(baseline, expected_ev)]
 
     actual_import = _series_from_after(result.df_after, day_30min, "grid_import")
     actual_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    np.testing.assert_allclose(actual_import, expected_import, rtol=0, atol=1e-9)
-    np.testing.assert_allclose(actual_export, np.zeros(len(day_30min)), rtol=0, atol=1e-9)
+    _assert_allclose(actual_import, expected_import)
+    _assert_allclose(actual_export, [0.0] * n)
 
 
 def test_run_pv_only_trace_matches_expected_split(day_30min):
     """Golden trace: PV-only run should split into import=max(load-pv,0), export=max(pv-load,0)."""
-    baseline = np.full(len(day_30min), 0.35, dtype=float)
+    baseline = [0.35] * len(day_30min)
     base = utils.build_canon_frame(
         day_30min,
         baseline,
@@ -537,20 +533,20 @@ def test_run_pv_only_trace_matches_expected_split(day_30min):
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
 
     result = scenario.run(base, pv=pv_cfg)
-    expected_pv = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
-    expected_import = np.maximum(baseline - expected_pv, 0.0)
-    expected_export = np.maximum(expected_pv - baseline, 0.0)
+    expected_pv = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_list()
+    expected_import = [max(b - p, 0.0) for b, p in zip(baseline, expected_pv)]
+    expected_export = [max(p - b, 0.0) for p, b in zip(expected_pv, baseline)]
 
     actual_import = _series_from_after(result.df_after, day_30min, "grid_import")
     actual_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    np.testing.assert_allclose(actual_import, expected_import, rtol=0, atol=1e-9)
-    np.testing.assert_allclose(actual_export, expected_export, rtol=0, atol=1e-9)
+    _assert_allclose(actual_import, expected_import)
+    _assert_allclose(actual_export, expected_export)
 
 
 def test_run_pv_battery_trace_matches_dispatch(day_30min):
     """Golden trace: PV+battery run should match dispatch math at each interval."""
-    baseline = np.full(len(day_30min), 0.5, dtype=float)
+    baseline = [0.5] * len(day_30min)
     base = utils.build_canon_frame(
         day_30min,
         baseline,
@@ -564,10 +560,10 @@ def test_run_pv_battery_trace_matches_dispatch(day_30min):
 
     result = scenario.run(base, pv=pv_cfg, battery=bat_cfg)
 
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
-    used_by_load = np.minimum(pv_arr, baseline)
-    expected_import = baseline - used_by_load
-    expected_leftover = pv_arr - used_by_load
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_list()
+    used_by_load = [min(p, b) for p, b in zip(pv_arr, baseline)]
+    expected_import = [b - u for b, u in zip(baseline, used_by_load)]
+    expected_leftover = [p - u for p, u in zip(pv_arr, used_by_load)]
     _dis, _ch, _soc = scenario._apply_battery_self_consume(
         expected_import,
         expected_leftover,
@@ -579,8 +575,8 @@ def test_run_pv_battery_trace_matches_dispatch(day_30min):
     actual_import = _series_from_after(result.df_after, day_30min, "grid_import")
     actual_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    np.testing.assert_allclose(actual_import, expected_import, rtol=0, atol=1e-9)
-    np.testing.assert_allclose(actual_export, expected_export, rtol=0, atol=1e-9)
+    _assert_allclose(actual_import, expected_import)
+    _assert_allclose(actual_export, expected_export)
 
 
 # ---------------------------------------------------------------------------
@@ -595,19 +591,19 @@ def solar_customer_df(day_30min):
     Night (outside 08:00-16:00): import=0.5 kWh, no export row.
     Daytime (08:00-15:30): no import row, export=0.4 kWh (solar > load).
     """
-    hours = day_30min.dt.hour().to_numpy()
-    night_mask = ~((hours >= 8) & (hours < 16))
-    day_mask_arr = (hours >= 8) & (hours < 16)
+    hours = day_30min.dt.hour().to_list()
+    night_mask = [not (8 <= h < 16) for h in hours]
+    day_mask_arr = [(8 <= h < 16) for h in hours]
 
-    night_ts = day_30min.filter(pl.Series(night_mask.tolist()))
-    day_ts = day_30min.filter(pl.Series(day_mask_arr.tolist()))
+    night_ts = day_30min.filter(pl.Series(night_mask))
+    day_ts = day_30min.filter(pl.Series(day_mask_arr))
 
     imp = utils.build_canon_frame(
-        night_ts, np.full(len(night_ts), 0.5),
+        night_ts, [0.5] * len(night_ts),
         nmi="Q", channel="E1", flow="grid_import", cadence_min=30,
     )
     exp = utils.build_canon_frame(
-        day_ts, np.full(len(day_ts), 0.4),
+        day_ts, [0.4] * len(day_ts),
         nmi="Q", channel="B1", flow="grid_export_solar", cadence_min=30,
     )
     return pl.concat([imp, exp]).sort("t_start")
@@ -638,23 +634,23 @@ def test_pv_stacked_export_equals_original_plus_new_excess(solar_customer_df, da
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     result = scenario.run(solar_customer_df, pv=pv_cfg)
 
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_list()
     orig_import = _flow_to_array(solar_customer_df, day_30min, "grid_import")
     orig_export = _flow_to_array(solar_customer_df, day_30min, "grid_export_solar")
 
-    net_before = orig_import - orig_export
-    net_after = net_before - pv_arr
-    expected_after_export = np.maximum(-net_after, 0.0)
+    net_before = [i - e for i, e in zip(orig_import, orig_export)]
+    net_after = [n - p for n, p in zip(net_before, pv_arr)]
+    expected_after_export = [max(-v, 0.0) for v in net_after]
 
     actual_after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
-    np.testing.assert_allclose(actual_after_export, expected_after_export, rtol=0, atol=1e-9)
+    _assert_allclose(actual_after_export, expected_after_export)
 
 
 def test_pv_self_consumption_pct_is_accurate(day_30min):
     """explain.pv_self_consumption_pct = (PV used by load / total PV) × 100."""
     base = utils.build_canon_frame(
         day_30min,
-        np.full(len(day_30min), 0.3),
+        [0.3] * len(day_30min),
         nmi="Q",
         channel="E1",
         flow="grid_import",
@@ -663,11 +659,11 @@ def test_pv_self_consumption_pct_is_accurate(day_30min):
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
     result = scenario.run(base, pv=pv_cfg)
 
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
-    baseline = np.full(len(day_30min), 0.3)
-    used_by_load = np.minimum(pv_arr, baseline)
-    pv_total = pv_arr.sum()
-    expected_pct = float(used_by_load.sum() / pv_total * 100.0) if pv_total > 0 else 0.0
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_list()
+    baseline = [0.3] * len(day_30min)
+    used_by_load = [min(p, b) for p, b in zip(pv_arr, baseline)]
+    pv_total = sum(pv_arr)
+    expected_pct = float(sum(used_by_load) / pv_total * 100.0) if pv_total > 0 else 0.0
 
     actual_pct = result.explain.get("pv_self_consumption_pct")
     assert actual_pct is not None
@@ -678,9 +674,8 @@ def test_pv_does_not_change_evening_peak_demand(day_30min):
     """PV generation stops before peak-demand window (19:00+), so adding PV
     must not affect the peak demand figure reported in the summary.
     """
-    kwh_vals = np.full(len(day_30min), 0.3)
-    hours = day_30min.dt.hour().to_numpy()
-    kwh_vals[hours == 19] = 2.0
+    hours = day_30min.dt.hour().to_list()
+    kwh_vals = [2.0 if h == 19 else 0.3 for h in hours]
 
     base = utils.build_canon_frame(
         day_30min, kwh_vals, nmi="Q", channel="E1", flow="grid_import", cadence_min=30
@@ -714,9 +709,9 @@ def test_ev_on_solar_customer_no_simultaneous_import_and_export(solar_customer_d
     after_import = _series_from_after(result.df_after, day_30min, "grid_import")
     after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    both_positive = (after_import > 1e-9) & (after_export > 1e-9)
-    assert not both_positive.any(), (
-        f"Simultaneous import and export found at {both_positive.sum()} interval(s)."
+    both_positive = [i > 1e-9 and e > 1e-9 for i, e in zip(after_import, after_export)]
+    assert not any(both_positive), (
+        f"Simultaneous import and export found at {sum(both_positive)} interval(s)."
     )
 
 
@@ -734,7 +729,7 @@ def test_ev_on_solar_customer_reduces_export_before_adding_import(solar_customer
     result = scenario.run(solar_customer_df, ev=ev_cfg)
     after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    assert after_export.sum() < baseline_export.sum()
+    assert sum(after_export) < sum(baseline_export)
 
 
 def test_ev_pv_battery_combo_on_solar_customer_energy_balance(solar_customer_df, day_30min):
@@ -771,7 +766,7 @@ def test_ev_pv_battery_combo_on_solar_customer_energy_balance(solar_customer_df,
 
 def test_ev_pv_battery_combo_golden_trace(day_30min):
     """Golden-trace test for full EV+PV+battery combo on an import-only baseline."""
-    baseline = np.full(len(day_30min), 0.6, dtype=float)
+    baseline = [0.6] * len(day_30min)
     base = utils.build_canon_frame(
         day_30min,
         baseline,
@@ -793,12 +788,12 @@ def test_ev_pv_battery_combo_golden_trace(day_30min):
 
     result = scenario.run(base, ev=ev_cfg, pv=pv_cfg, battery=bat_cfg)
 
-    ev_arr = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5)
-    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5)
+    ev_arr = scenario._apply_ev(day_30min, ev_cfg, interval_h=0.5).to_list()
+    pv_arr = scenario._apply_pv(day_30min, pv_cfg, interval_h=0.5).to_list()
 
-    net_after = baseline + ev_arr - pv_arr
-    expected_import = np.maximum(net_after, 0.0)
-    expected_excess = np.maximum(-net_after, 0.0)
+    net_after = [b + e - p for b, e, p in zip(baseline, ev_arr, pv_arr)]
+    expected_import = [max(v, 0.0) for v in net_after]
+    expected_excess = [max(-v, 0.0) for v in net_after]
 
     _dis, _ch, _soc = scenario._apply_battery_self_consume(
         expected_import,
@@ -810,5 +805,5 @@ def test_ev_pv_battery_combo_golden_trace(day_30min):
     actual_import = _series_from_after(result.df_after, day_30min, "grid_import")
     actual_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
-    np.testing.assert_allclose(actual_import, expected_import, rtol=0, atol=1e-9)
-    np.testing.assert_allclose(actual_export, expected_excess, rtol=0, atol=1e-9)
+    _assert_allclose(actual_import, expected_import)
+    _assert_allclose(actual_export, expected_excess)

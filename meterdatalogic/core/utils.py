@@ -1,5 +1,4 @@
 from __future__ import annotations
-import numpy as np
 import polars as pl
 from datetime import time as _time
 from typing import Literal
@@ -30,14 +29,13 @@ def infer_cadence_minutes(t_start: pl.Series, default: int = canon.DEFAULT_CADEN
         return int(default)
 
     diffs = ts.diff().drop_nulls()  # Duration series
-    diffs_min = np.array((diffs.dt.total_seconds() / 60.0).to_list(), dtype=float)
-    diffs_min = diffs_min[diffs_min > 0]
+    diffs_min = diffs.dt.total_seconds() / 60.0
+    diffs_min = diffs_min.filter(diffs_min > 0)
     if len(diffs_min) == 0:
         return int(default)
 
-    rounded = np.rint(diffs_min).astype(int)
-    vals, counts = np.unique(rounded, return_counts=True)
-    return int(vals[np.argmax(counts)])
+    rounded = diffs_min.round(0).cast(pl.Int32)
+    return int(rounded.value_counts(sort=True).row(0)[0])
 
 
 def interval_hours(df: CanonFrame) -> float:
@@ -80,11 +78,11 @@ def day_mask(t_start: pl.Series, days: Literal["ALL", "MF", "MS"] = "ALL") -> pl
     """Boolean mask for timestamps on selected days. Polars ISO weekday: Mon=1 … Sun=7."""
     if days == "ALL":
         return pl.Series([True] * len(t_start), dtype=pl.Boolean)
-    dow = t_start.dt.weekday().to_numpy()
+    dow = t_start.dt.weekday()
     if days == "MF":
-        return pl.Series(dow <= 5)   # Mon=1 … Fri=5
+        return dow <= 5   # Mon=1 … Fri=5
     if days == "MS":
-        return pl.Series(dow <= 6)   # Mon=1 … Sat=6
+        return dow <= 6   # Mon=1 … Sat=6
     return pl.Series([True] * len(t_start), dtype=pl.Boolean)
 
 
@@ -144,7 +142,7 @@ def daily_total_from_profile(profile: CanonFrame) -> float:
 
 def build_canon_frame(
     t_start: pl.Series,
-    kwh: np.ndarray,
+    kwh: pl.Series | list[float],
     *,
     nmi: str | None,
     channel: str,
@@ -152,13 +150,14 @@ def build_canon_frame(
     cadence_min: int | None,
 ) -> CanonFrame:
     n = len(t_start)
+    kwh_series = kwh.cast(pl.Float64) if isinstance(kwh, pl.Series) else pl.Series(kwh, dtype=pl.Float64)
     return pl.DataFrame(
         {
             "t_start": t_start,
             "nmi": pl.Series([nmi] * n, dtype=pl.String),
             "channel": pl.Series([channel] * n, dtype=pl.String),
             "flow": pl.Series([flow] * n, dtype=pl.String),
-            "kwh": pl.Series(np.asarray(kwh, dtype=float), dtype=pl.Float64),
+            "kwh": kwh_series,
             "cadence_min": pl.Series([cadence_min] * n, dtype=pl.Int32),
         }
     ).sort("t_start")
