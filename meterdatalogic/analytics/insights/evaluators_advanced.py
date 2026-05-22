@@ -1,3 +1,5 @@
+"""Complex multi-condition insight evaluators."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -7,7 +9,7 @@ from .types import Insight, InsightContext
 from .config import InsightConfig
 from ...core.types import CanonFrame
 from ..types import ScenarioResult
-from ...core import transform, utils
+from ...core import transform, utils, canon
 
 
 def _annual_total_cost(d: Optional[pl.DataFrame]) -> float:
@@ -49,7 +51,7 @@ def ev_impact(
         stats = transform.window_stats_from_profile(
             prof,
             windows,
-            utils.infer_cadence_minutes(dfx["t_start"]),
+            canon.infer_cadence_minutes(dfx["t_start"]),
             total_daily_kwh,
         )
         return float(stats.get("peak", {}).get("share_of_daily_pct", 0.0))
@@ -103,7 +105,7 @@ def battery_impact(
                     "end": config.advanced.battery_window_end,
                 }
             ],
-            utils.infer_cadence_minutes(dfx["t_start"]),
+            canon.infer_cadence_minutes(dfx["t_start"]),
         )
         return float(stats.get("win", {}).get("kwh_per_day", 0.0))
 
@@ -150,7 +152,7 @@ def load_shifting_opportunities(
         },
     ]
     stats = transform.window_stats_from_profile(
-        prof, windows, utils.infer_cadence_minutes(df["t_start"]), total_daily_kwh
+        prof, windows, canon.infer_cadence_minutes(df["t_start"]), total_daily_kwh
     )
     evening = float(stats.get("evening", {}).get("share_of_daily_pct", 0.0))
     daytime = float(stats.get("daytime", {}).get("share_of_daily_pct", 0.0))

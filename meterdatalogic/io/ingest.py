@@ -1,9 +1,11 @@
+"""Ingestion of raw meter data (NEM12, CSV, DataFrame) into CanonFrame."""
+
 from __future__ import annotations
 import polars as pl
 from typing import IO, Optional, TYPE_CHECKING
 
 from ..io import validate
-from ..core import utils, canon
+from ..core import canon
 from ..core.types import CanonFrame
 from ..config import DEFAULT_TZ, INGEST_KWH_COLUMN_ALIASES, INGEST_TIMESTAMP_COLUMN_ALIASES
 
@@ -26,7 +28,7 @@ def _attach_cadence_per_group(df: pl.DataFrame) -> pl.DataFrame:
             {
                 "nmi": [g["nmi"][0]],
                 "channel": [g["channel"][0]],
-                "cadence_min": [utils.infer_cadence_minutes(g["t_start"])],
+                "cadence_min": [canon.infer_cadence_minutes(g["t_start"])],
             }
         )
     )
@@ -105,7 +107,14 @@ def from_dataframe(
         df = df.with_columns(pl.col("cadence_min").cast(pl.Int32))
 
     # Ensure t_start is tz-aware
-    df = df.with_columns(utils.ensure_tz_aware(df["t_start"], tz).alias("t_start"))
+    _t = df["t_start"]
+    df = df.with_columns(
+        (
+            _t.dt.replace_time_zone(tz)
+            if _t.dtype.time_zone is None
+            else _t.dt.convert_time_zone(tz)
+        ).alias("t_start")
+    )
 
     cols = ["t_start"] + [c for c in canon.REQUIRED_COLS if c in df.columns]
     return df.select(cols).sort("t_start")
@@ -132,7 +141,7 @@ def from_nem12(
     # columns: nmi, suffix, serno, t_start, t_end, value, quality, evt_code, evt_desc
 
     if raw is None or raw.is_empty():
-        return utils.empty_canon_frame(tz=tz)
+        return canon.empty_canon_frame(tz=tz)
 
     # Rename suffix → channel, value → kwh; drop cols we don't need
     df = raw.rename({"suffix": "channel", "value": "kwh"}).select(

@@ -4,7 +4,7 @@ import datetime as _dt
 import polars as pl
 import pytest
 
-from meterdatalogic import scenario, utils
+from meterdatalogic import scenario, utils, canon
 import meterdatalogic.types as mdtypes
 
 TZ = "Australia/Brisbane"
@@ -31,7 +31,7 @@ def day_30min() -> pl.Series:
 @pytest.fixture
 def base_df(day_30min):
     """Canonical baseline: 0.5 kWh import per interval, single NMI/channel."""
-    return utils.build_canon_frame(
+    return canon.build_canon_frame(
         day_30min,
         [0.5] * len(day_30min),
         nmi="Q123",
@@ -161,7 +161,7 @@ def test_battery_self_consume_contract():
 
 def test_run_wires_components_and_prices(day_30min, monkeypatch):
     """run() orchestration: df_before/df_after and cost frames are populated."""
-    df_before = utils.build_canon_frame(
+    df_before = canon.build_canon_frame(
         day_30min,
         [0.5] * len(day_30min),
         nmi="Q",
@@ -244,7 +244,7 @@ def multi_flow_df(day_30min):
     night_ts = day_30min.filter(pl.Series(night_mask))
     day_ts = day_30min.filter(pl.Series(day_mask_arr))
 
-    import_frame = utils.build_canon_frame(
+    import_frame = canon.build_canon_frame(
         night_ts,
         [0.5] * len(night_ts),
         nmi="Q123",
@@ -252,7 +252,7 @@ def multi_flow_df(day_30min):
         flow="grid_import",
         cadence_min=30,
     )
-    export_frame = utils.build_canon_frame(
+    export_frame = canon.build_canon_frame(
         day_ts,
         [0.1] * len(day_ts),
         nmi="Q123",
@@ -291,7 +291,7 @@ def test_run_multiflow_import_total_is_not_doubled(multi_flow_df):
 
 def test_battery_with_pv_reduces_import(day_30min):
     """A battery paired with PV should reduce grid import compared to PV alone."""
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         [0.5] * len(day_30min),
         nmi="Q",
@@ -313,7 +313,7 @@ def test_battery_with_pv_reduces_import(day_30min):
 
 def test_battery_only_does_not_increase_import(day_30min):
     """Battery without PV: after-import must equal before-import."""
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         [0.5] * len(day_30min),
         nmi="Q",
@@ -333,7 +333,7 @@ def test_battery_only_does_not_increase_import(day_30min):
 
 def test_battery_without_pv_is_strict_noop(day_30min):
     """Battery-only on import-only baseline (no existing solar) is a strict no-op."""
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         [0.5] * len(day_30min),
         nmi="Q",
@@ -359,7 +359,7 @@ def test_battery_without_pv_is_strict_noop(day_30min):
 def test_ev_mf_strategy_skips_weekends_and_hits_daily_target():
     """EV(MF) should charge only on weekdays and hit daily_kwh target each weekday."""
     idx = _ts_range("2025-01-06", 7 * 48, 30)  # Mon 2025-01-06 for 7 days
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         idx,
         [0.0] * len(idx),
         nmi="Q",
@@ -387,7 +387,7 @@ def test_ev_mf_strategy_skips_weekends_and_hits_daily_target():
 
 def test_run_energy_balance_invariant_with_ev_pv_battery(day_30min):
     """End-to-end conservation check for scenario.run."""
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         [0.8] * len(day_30min),
         nmi="Q",
@@ -427,7 +427,7 @@ def test_run_energy_balance_invariant_with_ev_pv_battery(day_30min):
 
 def test_run_delta_matches_before_after_summaries(day_30min):
     """`result.delta` should be consistent with summary before/after totals."""
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         [0.6] * len(day_30min),
         nmi="Q",
@@ -497,7 +497,7 @@ def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
     """Golden trace: EV-only run should equal baseline + EV profile at each slot."""
     n = len(day_30min)
     baseline = [0.2 + (0.8 - 0.2) * i / (n - 1) for i in range(n)]
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         baseline,
         nmi="Q",
@@ -528,7 +528,7 @@ def test_run_ev_only_trace_matches_expected_import_curve(day_30min):
 def test_run_pv_only_trace_matches_expected_split(day_30min):
     """Golden trace: PV-only run should split into import=max(load-pv,0), export=max(pv-load,0)."""
     baseline = [0.35] * len(day_30min)
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         baseline,
         nmi="Q",
@@ -553,7 +553,7 @@ def test_run_pv_only_trace_matches_expected_split(day_30min):
 def test_run_pv_battery_trace_matches_dispatch(day_30min):
     """Golden trace: PV+battery run should match dispatch math at each interval."""
     baseline = [0.5] * len(day_30min)
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         baseline,
         nmi="Q",
@@ -604,7 +604,7 @@ def solar_customer_df(day_30min):
     night_ts = day_30min.filter(pl.Series(night_mask))
     day_ts = day_30min.filter(pl.Series(day_mask_arr))
 
-    imp = utils.build_canon_frame(
+    imp = canon.build_canon_frame(
         night_ts,
         [0.5] * len(night_ts),
         nmi="Q",
@@ -612,7 +612,7 @@ def solar_customer_df(day_30min):
         flow="grid_import",
         cadence_min=30,
     )
-    exp = utils.build_canon_frame(
+    exp = canon.build_canon_frame(
         day_ts,
         [0.4] * len(day_ts),
         nmi="Q",
@@ -662,7 +662,7 @@ def test_pv_stacked_export_equals_original_plus_new_excess(solar_customer_df, da
 
 def test_pv_self_consumption_pct_is_accurate(day_30min):
     """explain.pv_self_consumption_pct = (PV used by load / total PV) × 100."""
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         [0.3] * len(day_30min),
         nmi="Q",
@@ -691,7 +691,7 @@ def test_pv_does_not_change_evening_peak_demand(day_30min):
     hours = day_30min.dt.hour().to_list()
     kwh_vals = [2.0 if h == 19 else 0.3 for h in hours]
 
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min, kwh_vals, nmi="Q", channel="E1", flow="grid_import", cadence_min=30
     )
     pv_cfg = mdtypes.PVConfig(system_kwp=6.6, inverter_kw=5.0, loss_fraction=0.15)
@@ -781,7 +781,7 @@ def test_ev_pv_battery_combo_on_solar_customer_energy_balance(solar_customer_df,
 def test_ev_pv_battery_combo_golden_trace(day_30min):
     """Golden-trace test for full EV+PV+battery combo on an import-only baseline."""
     baseline = [0.6] * len(day_30min)
-    base = utils.build_canon_frame(
+    base = canon.build_canon_frame(
         day_30min,
         baseline,
         nmi="Q",

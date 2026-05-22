@@ -1,8 +1,10 @@
+"""Conversion between CanonFrame and the compressed LogicalCanon format."""
+
 from __future__ import annotations
 import polars as pl
 
 from ..io import validate
-from ..core import utils, canon
+from ..core import canon
 from ..core.types import CanonFrame
 from .types import LogicalCanon, LogicalSeries, LogicalDay
 
@@ -28,7 +30,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
     for (nmi, channel), g in df.group_by(["nmi", "channel"], maintain_order=False):
         g = g.sort("t_start")
 
-        cadence_min = utils.infer_cadence_minutes(g["t_start"])
+        cadence_min = canon.infer_cadence_minutes(g["t_start"])
 
         # Derive local date for each interval
         g = g.with_columns(pl.col("t_start").dt.convert_time_zone(tz).dt.date().alias("_date"))
@@ -87,9 +89,8 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
 
 
 def from_logical(obj: LogicalCanon) -> CanonFrame:
-    """Convert compressed logical model back into canonical DataFrame."""
     if not obj:
-        return utils.empty_canon_frame()
+        return canon.empty_canon_frame()
 
     frames: list[pl.DataFrame] = []
 
@@ -137,7 +138,7 @@ def from_logical(obj: LogicalCanon) -> CanonFrame:
                 )
 
     if not frames:
-        return utils.empty_canon_frame()
+        return canon.empty_canon_frame()
 
     df = pl.concat(frames).sort("t_start")
     validate.assert_canon(df)

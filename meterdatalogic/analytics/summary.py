@@ -1,10 +1,12 @@
+"""Summarise meter data into a structured SummaryPayload dict."""
+
 from __future__ import annotations
 from typing import Literal
 
 import polars as pl
 
 from .. import config
-from ..core import transform, utils
+from ..core import transform, utils, canon
 from ..core.types import CanonFrame
 from .types import SummaryPayload, SummaryPeaks
 from . import insights as insights_mod
@@ -73,7 +75,7 @@ def summarise(
     end = ts_col.max()
     days = int((end - start).days) + 1 if (start is not None and end is not None) else 0
 
-    cadence = utils.infer_cadence_minutes(ts_col, default=config.DEFAULT_CADENCE_MIN)
+    cadence = canon.infer_cadence_minutes(ts_col)
 
     totals = utils.compute_flow_totals(df)
     total_import_kwh = float(sum(totals.get(k, 0.0) for k in totals if "import" in k))

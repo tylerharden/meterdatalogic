@@ -1,3 +1,5 @@
+"""Types for the insights subsystem: Insight, InsightContext, and evaluator protocol."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

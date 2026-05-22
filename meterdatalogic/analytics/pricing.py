@@ -1,3 +1,5 @@
+"""Tariff and billing calculations for CanonFrame meter data."""
+
 from __future__ import annotations
 import bisect
 import polars as pl

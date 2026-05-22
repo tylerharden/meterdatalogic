@@ -37,9 +37,9 @@ def _import_df(ts: pl.Series, kwh=0.5) -> pl.DataFrame:
 
 
 def test_peak_demand_characteristics_returns_none_on_empty():
-    from meterdatalogic import utils
+    from meterdatalogic import canon
 
-    df = utils.empty_canon_frame(tz=TZ)
+    df = canon.empty_canon_frame(tz=TZ)
     assert evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig()) is None
 
 
@@ -78,9 +78,9 @@ def test_peak_demand_characteristics_spiky_data_triggers_warning():
 
 
 def test_step_change_baseload_returns_none_on_empty():
-    from meterdatalogic import utils
+    from meterdatalogic import canon
 
-    df = utils.empty_canon_frame(tz=TZ)
+    df = canon.empty_canon_frame(tz=TZ)
     assert evaluators_advanced.step_change_baseload(df, config=InsightConfig()) is None
 
 

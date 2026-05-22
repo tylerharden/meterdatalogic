@@ -1,16 +1,4 @@
-"""Time-series transformations on CanonFrame meter data.
-
-All public functions in this module take a CanonFrame as their primary input and
-return a polars DataFrame. They do not mutate the input.
-
-Functions:
-    demand_window       — convert kWh → kW and aggregate per period
-    seasonal_totals     — aggregate kWh grouped by season, year, and flow
-    tou_bins            — aggregate kWh into named time-of-use bands
-    profile             — build an average-day slot profile
-    window_stats_from_profile — compute avg_kw / kwh / share for time windows
-    period_breakdown    — per-day or per-month totals, peaks, and averages
-"""
+"""Time-series transformations on CanonFrame meter data."""
 
 from __future__ import annotations
 import polars as pl

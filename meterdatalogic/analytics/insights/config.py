@@ -1,3 +1,5 @@
+"""Default configuration for insight evaluators."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

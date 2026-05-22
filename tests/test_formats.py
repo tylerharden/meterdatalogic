@@ -2,11 +2,11 @@
 
 import polars as pl
 
-from meterdatalogic import formats, ingest, utils, validate
+from meterdatalogic import formats, ingest, validate, canon
 
 
 def test_to_logical_empty_returns_list():
-    df_empty = utils.empty_canon_frame()
+    df_empty = canon.empty_canon_frame()
     out = formats.to_logical(df_empty)
     assert out == []
 

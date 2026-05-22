@@ -1,3 +1,5 @@
+"""Simple threshold-based insight evaluators."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -5,7 +7,7 @@ from typing import Optional
 from .types import Insight, InsightContext
 from .config import InsightConfig
 from ...core.types import CanonFrame
-from ...core import transform, utils
+from ...core import transform, utils, canon
 
 
 def usage_vs_benchmark(
@@ -73,7 +75,7 @@ def peak_time_bias(
     win = transform.window_stats_from_profile(
         prof,
         windows,
-        utils.infer_cadence_minutes(df["t_start"]),
+        canon.infer_cadence_minutes(df["t_start"]),
         total_daily_kwh,
     )
     share = float(win.get("peak", {}).get("share_of_daily_pct", 0.0))
@@ -111,7 +113,7 @@ def data_completeness(
     if df.is_empty():
         return None
     ts = df["t_start"]
-    cadence_min = int(utils.infer_cadence_minutes(ts))
+    cadence_min = int(canon.infer_cadence_minutes(ts))
     if cadence_min <= 0:
         return None
     unique_ts = ts.unique()

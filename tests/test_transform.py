@@ -3,12 +3,12 @@
 import polars as pl
 import pytest
 
-from meterdatalogic import transform, ingest, utils
+from meterdatalogic import transform, ingest, canon
 
 
 def _mk_df(ts: pl.Series, kwh=1.0, flow="grid_import") -> pl.DataFrame:
     n = len(ts)
-    cadence = utils.infer_cadence_minutes(ts)
+    cadence = canon.infer_cadence_minutes(ts)
     return pl.DataFrame(
         {
             "t_start": ts,

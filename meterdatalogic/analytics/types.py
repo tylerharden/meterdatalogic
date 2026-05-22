@@ -1,3 +1,5 @@
+"""TypedDicts and Pydantic models for analytics outputs."""
+
 from __future__ import annotations
 from typing import TypedDict, Literal, Optional, List, Dict
 from dataclasses import dataclass

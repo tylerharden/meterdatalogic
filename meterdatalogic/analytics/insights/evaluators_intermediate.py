@@ -1,3 +1,5 @@
+"""Time-of-use and statistical pattern evaluators."""
+
 from __future__ import annotations
 
 from typing import Optional

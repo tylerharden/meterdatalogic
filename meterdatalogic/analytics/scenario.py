@@ -1,3 +1,5 @@
+"""Solar PV, EV, and battery scenario modelling."""
+
 from __future__ import annotations
 import math
 from collections import defaultdict
@@ -6,7 +8,7 @@ import polars as pl
 
 from ..analytics import pricing
 from ..io import validate
-from ..core import utils
+from ..core import utils, canon
 from ..config import DEFAULT_TZ as _DEFAULT_TZ
 from ..core.types import CanonFrame
 
@@ -181,7 +183,7 @@ def run(
     import_arr = _agg_to_ts(df_imp)
     export_arr = _agg_to_ts(df_exp)
 
-    interval_h = utils.infer_cadence_minutes(df["t_start"]) / 60.0
+    interval_h = canon.infer_cadence_minutes(df["t_start"]) / 60.0
 
     ev_arr = (
         _apply_ev(all_ts, ev, interval_h)
@@ -235,7 +237,7 @@ def run(
     parts = []
     if imp_mask.any():
         parts.append(
-            utils.build_canon_frame(
+            canon.build_canon_frame(
                 all_ts.filter(imp_mask),
                 [v for v, m in zip(import_prebat, imp_mask_list) if m],
                 nmi=nmi_val,
@@ -246,7 +248,7 @@ def run(
         )
     if exp_mask.any():
         parts.append(
-            utils.build_canon_frame(
+            canon.build_canon_frame(
                 all_ts.filter(exp_mask),
                 [v for v, m in zip(combined_excess, exp_mask_list) if m],
                 nmi=nmi_val,
@@ -261,7 +263,7 @@ def run(
         if tz and df_after["t_start"].dtype.time_zone != tz:
             df_after = df_after.with_columns(pl.col("t_start").dt.convert_time_zone(tz))
     else:
-        df_after = utils.empty_canon_frame(tz=tz or _DEFAULT_TZ)
+        df_after = canon.empty_canon_frame(tz=tz or _DEFAULT_TZ)
 
     validate.assert_canon(df_after)
 

@@ -1,3 +1,5 @@
+"""Core type aliases: CanonFrame and Flow."""
+
 from __future__ import annotations
 from typing import Literal
 import polars as pl

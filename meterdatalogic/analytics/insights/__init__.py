@@ -1,3 +1,5 @@
+"""Public API for generating insights from CanonFrame data."""
+
 from __future__ import annotations
 
 from .types import (

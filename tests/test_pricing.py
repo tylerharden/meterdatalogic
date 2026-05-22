@@ -3,7 +3,7 @@
 import datetime as _dt
 import polars as pl
 
-from meterdatalogic import pricing, utils, ingest
+from meterdatalogic import pricing, ingest, canon
 import meterdatalogic.types as mdtypes
 
 TZ = "Australia/Brisbane"
@@ -18,7 +18,7 @@ def _ts_range(start: str, periods: int, freq_min: int) -> pl.Series:
 def _mk_io_week(halfhour_rng: pl.Series) -> pl.DataFrame:
     """Build a week with steady import and sparse export."""
     n = len(halfhour_rng)
-    imp = utils.build_canon_frame(
+    imp = canon.build_canon_frame(
         halfhour_rng,
         [0.5] * n,
         nmi="Q123",
@@ -27,7 +27,7 @@ def _mk_io_week(halfhour_rng: pl.Series) -> pl.DataFrame:
         cadence_min=30,
     )
     export_idx = halfhour_rng.gather(list(range(0, n, 4)))
-    exp = utils.build_canon_frame(
+    exp = canon.build_canon_frame(
         export_idx,
         [0.25] * len(export_idx),
         nmi="Q123",
@@ -44,7 +44,7 @@ def _months_from_series(ts: pl.Series) -> list[str]:
 
 def test_no_demand_no_export(halfhour_rng, monkeypatch):
     """If there is no demand and no export, only energy_cost should be > 0."""
-    df = utils.build_canon_frame(
+    df = canon.build_canon_frame(
         halfhour_rng,
         [0.5] * len(halfhour_rng),
         nmi="Q",
@@ -127,7 +127,7 @@ def test_pricing_estimate_monthly_cost(canon_df_mixed_flows):
 
 def test_compute_billables_optional_flows(halfhour_rng):
     """include_controlled_load and include_total_import add expected columns."""
-    import_df = utils.build_canon_frame(
+    import_df = canon.build_canon_frame(
         halfhour_rng,
         [0.5] * len(halfhour_rng),
         nmi="Q123",
@@ -137,7 +137,7 @@ def test_compute_billables_optional_flows(halfhour_rng):
     )
     n_cl = len(halfhour_rng) // 2
     cl_series = halfhour_rng.gather(list(range(0, len(halfhour_rng), 2)))
-    cl_df = utils.build_canon_frame(
+    cl_df = canon.build_canon_frame(
         cl_series,
         [0.3] * n_cl,
         nmi="Q123",
@@ -147,7 +147,7 @@ def test_compute_billables_optional_flows(halfhour_rng):
     )
     n_exp = len(halfhour_rng) // 3
     exp_series = halfhour_rng.gather(list(range(0, len(halfhour_rng), 3)))
-    export_df = utils.build_canon_frame(
+    export_df = canon.build_canon_frame(
         exp_series,
         [0.2] * n_exp,
         nmi="Q123",

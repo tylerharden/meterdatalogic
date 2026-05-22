@@ -1,3 +1,5 @@
+"""Validation functions enforcing CanonFrame schema invariants."""
+
 from __future__ import annotations
 import polars as pl
 from typing import Optional

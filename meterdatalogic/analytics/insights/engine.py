@@ -1,3 +1,5 @@
+"""Insight evaluation orchestration engine."""
+
 from __future__ import annotations
 
 import logging
