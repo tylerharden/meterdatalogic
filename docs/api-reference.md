@@ -1,528 +1,517 @@
 # API Reference
 
-Complete reference for all modules in meterdatalogic.
+Complete reference for all public modules in meterdatalogic.
+
+> All DataFrames are `polars.DataFrame`. There is no pandas dependency.
+
+---
 
 ## Import Pattern
 
-All modules use a simple, flat API:
-
 ```python
 import meterdatalogic as ml
 
-# Data I/O
 df = ml.ingest.from_nem12("data.csv")
 ml.validate.assert_canon(df)
-logical = ml.formats.to_logical(df)
 
-# Core operations
-daily = ml.transform.aggregate(df, freq="1D")
-profile = ml.transform.profile(df)
-
-# Analytics
+daily = ml.transform.aggregate(df, freq="1d", groupby="flow", pivot=True)
 summary = ml.summary.summarise(df)
 billables = ml.pricing.compute_billables(df, plan)
 insights = ml.insights.generate_insights(df)
-scenario_df = ml.scenario.run(df, ev=ev_config, pv=pv_config)
 ```
 
 ---
 
-## Core Modules
+## Canonical Schema
 
-### `canon`
+`CanonFrame` is a `polars.DataFrame` with the following columns:
 
-Canonical schema constants and normalization.
+| Column | Type | Description |
+|---|---|---|
+| `t_start` | `Datetime(tz-aware)` | Interval start timestamp — tz-aware, sorted ascending |
+| `nmi` | `String` | National Metering Identifier |
+| `channel` | `String` | Source register label (e.g. `E1`, `B1`) |
+| `flow` | `String` | `grid_import`, `controlled_load_import`, or `grid_export_solar` |
+| `kwh` | `Float64` | Energy in the interval (always non-negative) |
+| `cadence_min` | `Int32` | Interval length in minutes (e.g. 30, 15) |
 
-**Constants:**
-- `INDEX_NAME = "t_start"` - Required index name for all CanonFrame DataFrames
-- `DEFAULT_TZ = "Australia/Brisbane"` - Default timezone (no DST)
-- `DEFAULT_CADENCE = 30` - Default interval minutes
-
-**Functions:**
-- `from_nem12(path: str, tz: str = DEFAULT_TZ) -> CanonFrame` - Load NEM12 file to canonical format
-- `from_dataframe(df: pd.DataFrame, tz: str = DEFAULT_TZ) -> CanonFrame` - Normalize raw DataFrame
+`t_start` is a **regular column**, not an index.
 
 ---
 
-### `ingest`
+## `canon`
 
-Load and normalize raw meter data from various sources.
+Schema constants.
 
-**Functions:**
+```python
+ml.canon.INDEX_NAME      # "t_start"
+ml.canon.REQUIRED_COLS   # ["nmi", "channel", "flow", "kwh", "cadence_min"]
+ml.canon.CHANNEL_MAP     # {"E1": "grid_import", "E2": "controlled_load_import", "B1": "grid_export_solar"}
+ml.canon.CANON_SCHEMA    # polars schema dict
+```
 
-#### `from_dataframe(df, tz="Australia/Brisbane", nmi=None, channel=None, flow=None, cadence_min=None)`
+---
 
-Normalize a raw DataFrame to canonical format.
+## `ingest`
+
+Load raw data into canonical form.
+
+### `from_nem12(file_like, *, tz, channel_map, nmi)`
+
+Parse a NEM12 file via nemreader 1.0.0.
+
+```python
+df = ml.ingest.from_nem12(
+    "data/sample.csv",
+    tz="Australia/Brisbane",   # default
+    nmi=None,                  # filter to specific NMI (optional)
+)
+```
 
 **Parameters:**
-- `df` (DataFrame): Raw data with datetime column and energy readings
-- `tz` (str): Timezone for naive timestamps
-- `nmi` (str, optional): NMI identifier, auto-detected if missing
-- `channel` (str, optional): Channel label (e.g., "E1", "B1")
-- `flow` (str, optional): Flow type (grid_import, controlled_load_import, grid_export_solar)
-- `cadence_min` (int, optional): Interval minutes, auto-detected if missing
+- `file_like` — file path (str) or file-like object
+- `tz` (str) — timezone for tz-naive timestamps. Default: `"Australia/Brisbane"`
+- `channel_map` (dict, optional) — override channel→flow mapping
+- `nmi` (str, optional) — filter to a single NMI; raises if not found
 
-**Returns:** CanonFrame with validated schema
+**Returns:** `CanonFrame`
 
-**Example:**
+---
+
+### `from_dataframe(df, *, tz, channel_map, nmi)`
+
+Normalise a raw `polars.DataFrame` to canonical form.
+
 ```python
-import meterdatalogic as ml
+import polars as pl
 
+raw = pl.read_csv("data/export.csv", try_parse_dates=True)
 df = ml.ingest.from_dataframe(
-    raw_df,
+    raw,
     tz="Australia/Sydney",
     nmi="NMI1234567",
-    flow="grid_import"
 )
 ```
 
-#### `from_nem12(path, tz="Australia/Brisbane")`
-
-Parse a NEM12 file and return canonical DataFrame.
-
 **Parameters:**
-- `path` (str): File path to NEM12 CSV
-- `tz` (str): Timezone for interpretation
+- `df` (pl.DataFrame) — must have a timestamp column and a `kwh` (or aliased energy) column
+- `tz` (str) — timezone for tz-naive timestamps
+- `channel_map` (dict, optional) — override channel→flow mapping
+- `nmi` (str, optional) — filter to a single NMI
 
-**Returns:** CanonFrame with all channels from the file
+Timestamp column is auto-detected from: `t_start`, `timestamp`, `time`, `ts`, `datetime`, `date`.
+Energy column is auto-detected from: `kwh`, `energy`, `value`, `consumption`.
 
-**Example:**
-```python
-df = ml.ingest.from_nem12("data/sample.csv")
-```
-
-#### `from_json(data, tz="Australia/Brisbane")`
-
-Load canonical data from JSON-ready format.
-
-**Parameters:**
-- `data` (dict): LogicalCanon dictionary
-- `tz` (str): Timezone to apply
-
-**Returns:** CanonFrame
+**Returns:** `CanonFrame`
 
 ---
 
-### `validate`
+## `validate`
 
-Schema validation and enforcement.
+### `assert_canon(df)`
 
-**Functions:**
-
-#### `assert_canon(df)`
-
-Validate that DataFrame conforms to canonical schema. Raises `CanonError` on violations.
+Validate that a DataFrame conforms to canonical schema. Raises `CanonError` on violations.
 
 **Checks:**
-- Index is DatetimeIndex named "t_start"
-- Index is tz-aware and sorted
-- Required columns present: ['nmi', 'channel', 'flow', 'kwh', 'cadence_min']
-- No duplicate timestamps per (nmi, channel)
-- cadence_min values are consistent per (nmi, channel)
+- `t_start` column exists and is a tz-aware `Datetime` column
+- `t_start` is sorted ascending
+- All required columns present: `['nmi', 'channel', 'flow', 'kwh', 'cadence_min']`
+- No negative `kwh` values
 
-**Raises:** `CanonError` with descriptive message
-
-**Example:**
 ```python
-ml.validate.assert_canon(df)  # Raises if invalid
+ml.validate.assert_canon(df)  # raises CanonError if invalid
 ```
-
-#### `ensure(df)`
-
-Light validation - returns True if canonical, False otherwise. No exceptions.
-
-**Returns:** bool
 
 ---
 
-### `transform`
+### `validate_nmi(df, nmi)`
 
-Data transformation, aggregation, and filtering.
+Validate or filter to a single NMI.
 
-**Functions:**
-
-#### `aggregate(df, freq, how="sum", groupby=None, add_power=False, power_col="kw")`
-
-Unified aggregation function for resampling and grouping.
-
-**Parameters:**
-- `df` (CanonFrame): Input data
-- `freq` (str): Pandas frequency string ("1D", "1H", "30min", "MS", etc.)
-- `how` (str): Aggregation method - "sum", "mean", "max", "min"
-- `groupby` (list[str], optional): Additional columns to group by (e.g., ["flow"])
-- `add_power` (bool): If True, calculate average power (kW) from kWh
-- `power_col` (str): Name for power column if add_power=True
-
-**Returns:** Aggregated CanonFrame
-
-**Examples:**
 ```python
-# Daily totals
-daily = ml.transform.aggregate(df, freq="1D", how="sum")
-
-# Hourly by flow
-hourly = ml.transform.aggregate(df, freq="1H", groupby=["flow"])
-
-# With power calculation
-daily = ml.transform.aggregate(df, freq="1D", add_power=True)
+df = ml.validate.validate_nmi(df, nmi="NMI1234567")
 ```
 
-#### `tou_bins(df, bands)`
+**Returns:** `pl.DataFrame` filtered to the specified NMI. Raises `ValueError` if multiple NMIs are found and none is specified, or if the specified NMI is not present.
 
-Classify intervals into Time-of-Use bands.
+---
+
+## `formats`
+
+Convert between `CanonFrame` and JSON-ready representations.
+
+### `to_logical(df)`
+
+Compress a `CanonFrame` into a `LogicalCanon` — a list of dicts suitable for JSON serialisation. Groups by `(nmi, channel)` and packs kWh values into per-day arrays.
+
+```python
+logical = ml.formats.to_logical(df)
+# Returns: list[dict] — JSON-serialisable
+```
+
+### `from_logical(obj)`
+
+Reconstruct a `CanonFrame` from a `LogicalCanon` object.
+
+```python
+df = ml.formats.from_logical(logical)
+```
+
+---
+
+## `transform`
+
+### `aggregate(df, *, freq, ...)`
+
+Unified aggregation helper. Filters by flow, applies an optional time window, then resamples.
+
+```python
+# Daily totals per flow (wide columns)
+daily = ml.transform.aggregate(df, freq="1d", groupby="flow", pivot=True)
+
+# Monthly peak demand in kW (Mon–Fri 16:00–21:00)
+demand = ml.transform.aggregate(
+    df,
+    freq="1MS",
+    flows=["grid_import"],
+    metric="kW",
+    stat="max",
+    out_col="demand_kw",
+    window_start="16:00",
+    window_end="21:00",
+    window_days="MF",
+)
+
+# Seasonal totals (southern hemisphere)
+seasonal = ml.transform.aggregate(
+    df,
+    freq="1MS",
+    groupby=["season", "flow"],
+    hemisphere="southern",
+)
+```
 
 **Parameters:**
-- `df` (CanonFrame): Input data
-- `bands` (list[TouBand]): List of TOU band definitions
+- `freq` (str | None) — polars duration string: `"1d"`, `"1h"`, `"30m"`, `"1MS"`, etc. Pass `None` to aggregate without resampling.
+- `value_col` (str) — column to aggregate. Default: `"kwh"`
+- `agg` (str) — aggregation: `"sum"`, `"mean"`, `"max"`, `"min"`. Default: `"sum"`
+- `groupby` (str | list[str], optional) — additional group columns (e.g. `"flow"`, `"season"`)
+- `pivot` (bool) — pivot groupby column into wide columns. Default: `False`
+- `flows` (list[str], optional) — filter to these flow values before aggregating
+- `window_start` / `window_end` (str, optional) — time-of-day filter `"HH:MM"`
+- `window_days` (`"ALL"` | `"MF"` | `"MS"`) — day-of-week filter. Default: `"ALL"`
+- `metric` (`"kWh"` | `"kW"`) — `"kW"` converts energy to power using `cadence_min`. Default: `"kWh"`
+- `stat` (`"max"` | `"mean"` | `"sum"`) — stat used when `metric="kW"`. Default: `"max"`
+- `out_col` (str, optional) — rename the output value column
+- `hemisphere` (`"northern"` | `"southern"`, optional) — required when `groupby` includes `"season"`
 
-**Returns:** CanonFrame with added 'tou_label' column
+**Returns:** `pl.DataFrame`
 
-**Example:**
+---
+
+### `tou_bins(df, bands, *, out_freq, flows, value_col)`
+
+Aggregate energy into named Time-of-Use bands, returning one row per month.
+
+`bands` is a list of dicts with keys `name`, `start`, `end`. Pass `ToUBand` objects via `.model_dump()`.
+
 ```python
-from meterdatalogic.types import TouBand
-
 bands = [
-    TouBand(label="peak", weekdays=[0,1,2,3,4], start_hour=14, end_hour=20),
-    TouBand(label="shoulder", weekdays=[0,1,2,3,4], start_hour=7, end_hour=14),
-    TouBand(label="offpeak", weekdays=None, start_hour=None, end_hour=None)
+    {"name": "peak",     "start": "16:00", "end": "21:00"},
+    {"name": "shoulder", "start": "07:00", "end": "16:00"},
+    {"name": "offpeak",  "start": "21:00", "end": "07:00"},
 ]
-
-df_tou = ml.transform.tou_bins(df, bands)
+tou = ml.transform.tou_bins(df, bands)
+# Columns: month, peak, shoulder, offpeak (kWh per band per month)
 ```
 
-#### `profile(df, n=24, groupby=None, how="mean")`
-
-Generate time-of-day profile (24-hour average).
-
 **Parameters:**
-- `df` (CanonFrame): Input data
-- `n` (int): Number of buckets (default 24 for hourly)
-- `groupby` (list[str], optional): Group columns
-- `how` (str): Aggregation method
+- `bands` (list[dict]) — each dict must have `name`, `start` (`"HH:MM"`), `end` (`"HH:MM"`)
+- `out_freq` (str) — output frequency. Default: `"1MS"` (monthly)
+- `flows` (list[str], optional) — filter to these flows. Default: `("grid_import",)`
+- `value_col` (str) — column to sum. Default: `"kwh"`
 
-**Returns:** DataFrame with 'hour_of_day' and aggregated values
-
-#### `period_breakdown(df, freq, groupby=None, how="sum")`
-
-Break down data by period (daily, monthly, etc.).
-
-**Parameters:**
-- `df` (CanonFrame): Input data
-- `freq` (str): Period frequency
-- `groupby` (list[str], optional): Additional grouping
-- `how` (str): Aggregation method
-
-**Returns:** Aggregated DataFrame
+**Returns:** `pl.DataFrame` with `month` (str `"YYYY-MM"`) and one column per band.
 
 ---
 
-### `summary`
+### `profile(df, *, flows, reducer, include_import_total)`
 
-JSON-ready summaries and rollups.
+Build an average-day load profile grouped by time slot (`"HH:MM"`).
 
-**Functions:**
-
-#### `daily_summary(df)`
-
-Daily energy totals per flow.
-
-**Returns:** Dictionary with daily kWh by flow type
-
-#### `monthly_summary(df)`
-
-Monthly energy totals and statistics.
-
-**Returns:** Dictionary with monthly rollups
-
-#### `profile24(df, flow=None)`
-
-24-hour load profile.
+```python
+prof = ml.transform.profile(df)
+# Columns: slot, grid_import, [grid_export_solar, ...], import_total
+```
 
 **Parameters:**
-- `df` (CanonFrame): Input data
-- `flow` (str, optional): Filter to specific flow type
+- `flows` (list[str], optional) — filter to specific flows
+- `reducer` (`"mean"` | `"sum"` | `"max"`) — aggregation across days. Default: `"mean"`
+- `include_import_total` (bool) — add `import_total` column summing all import flows. Default: `True`
 
-**Returns:** Dictionary with hourly averages
-
-#### `peaks(df, top_n=10)`
-
-Find peak demand intervals.
-
-**Parameters:**
-- `df` (CanonFrame): Input data
-- `top_n` (int): Number of top intervals to return
-
-**Returns:** Dictionary with peak timestamps and values
+**Returns:** `pl.DataFrame` with `slot` column and one column per flow.
 
 ---
 
-### `pricing`
+### `period_breakdown(df, *, freq, flows, cadence_min, labels)`
 
-Tariff calculations and billing.
+Compute per-period totals, peaks, and average interval kWh.
 
-**Functions:**
-
-#### `compute_billables(df, plan, mode="monthly", cycles=None, include_controlled_load=False, include_total_import=False)`
-
-Calculate billable quantities for energy charges.
+```python
+daily = ml.transform.period_breakdown(df, freq="1D", cadence_min=30, labels="day")
+# Returns dict with keys: "total", "peaks", "average"
+# daily["total"]   — columns: day, <flow columns>, total_kwh
+# daily["peaks"]   — columns: day, peak_interval_kwh
+# daily["average"] — columns: day, avg_interval_kwh
+```
 
 **Parameters:**
-- `df` (CanonFrame): Input meter data
-- `plan` (Plan): Tariff plan with TOU bands, demand window, and rates
-- `mode` (str): "monthly" (calendar months) or "cycles" (custom billing periods)
-- `cycles` (list of tuples, optional): Required when mode="cycles". List of (start_date, end_date) billing cycle tuples
-- `include_controlled_load` (bool): If True, adds 'controlled_load_kwh' column with controlled load import totals (default: False)
-- `include_total_import` (bool): If True, adds 'total_import_kwh' column with all import flows summed (default: False)
+- `freq` (`"1D"` | `"1MS"`) — daily or monthly
+- `flows` (list[str], optional) — filter to specific flows
+- `cadence_min` (int, optional) — used to compute `avg_interval_kwh`
+- `labels` (`"day"` | `"month"`, optional) — label column name (auto-detected from freq)
 
-**Returns:** DataFrame with billable quantities per period
+**Returns:** `dict[str, pl.DataFrame]` with keys `"total"`, `"peaks"`, `"average"`.
 
-**Columns returned:**
-- mode="monthly": `['month', <TOU band names>, 'export_kwh', 'demand_kw']`
-- mode="cycles": `['cycle', <TOU band names>, 'export_kwh', 'demand_kw', 'days_in_cycle']`
-- Optional: `'controlled_load_kwh'`, `'total_import_kwh'` (if requested)
+---
 
-**Example:**
+### `top_n_from_profile(profile_df, *, n, value_col)`
+
+Find the top N peak hours from an average-day profile.
+
+```python
+prof = ml.transform.profile(df)
+top = ml.transform.top_n_from_profile(prof, n=4)
+# Returns: {"labels": ["17", "18", "19", "20"], "value_total": 1.23, "share_pct": 28.4}
+```
+
+**Returns:** dict with `labels` (list of hour strings), `value_total` (float), `share_pct` (float).
+
+---
+
+## `summary`
+
+### `summarise(df, hemisphere)`
+
+Generate a JSON-ready summary payload for dashboards.
+
+```python
+result = ml.summary.summarise(df)
+result = ml.summary.summarise(df, hemisphere="southern")  # explicit hemisphere
+```
+
+**Parameters:**
+- `df` (CanonFrame)
+- `hemisphere` (`"northern"` | `"southern"`, optional) — for seasonal classification. Default: `config.DEFAULT_HEMISPHERE` (`"southern"`)
+
+**Returns:** `SummaryPayload` (TypedDict) with keys:
+- `meta` — start/end dates, cadence, days
+- `stats` — totals, peaks, averages
+- `datasets` — profile, daily breakdown, monthly breakdown, seasonal breakdown
+- `insights` — basic insight list
+
+---
+
+## `pricing`
+
+### `compute_billables(df, plan, *, mode, cycles, ...)`
+
+Compute billable quantities (TOU kWh, demand kW, export kWh) from interval data.
+
+```python
+from meterdatalogic.types import Plan, ToUBand, DemandCharge
+
+plan = Plan(
+    usage_bands=[
+        ToUBand(name="peak",    start="16:00", end="21:00", rate_c_per_kwh=45.0),
+        ToUBand(name="offpeak", start="21:00", end="16:00", rate_c_per_kwh=22.0),
+    ],
+    demand=DemandCharge(
+        window_start="16:00", window_end="21:00",
+        days="MF", rate_per_kw_per_month=12.0,
+    ),
+    fixed_c_per_day=95.0,
+    feed_in_c_per_kwh=6.0,
+)
+
+# Monthly mode (one row per calendar month)
+bill = ml.pricing.compute_billables(df, plan, mode="monthly")
+
+# Cycles mode (one row per billing period)
+cycles = [("2025-05-31", "2025-06-30"), ("2025-07-01", "2025-07-31")]
+bill = ml.pricing.compute_billables(df, plan, mode="cycles", cycles=cycles)
+```
+
+**Parameters:**
+- `plan` (Plan) — tariff plan pydantic model
+- `mode` (`"monthly"` | `"cycles"`) — billing period type. Default: `"monthly"`
+- `cycles` (list of (start, end) tuples) — required when `mode="cycles"`
+- `include_controlled_load` (bool) — add `controlled_load_kwh` column. Default: `False`
+- `include_total_import` (bool) — add `total_import_kwh` column. Default: `False`
+
+**Returns:** `pl.DataFrame`. Monthly columns: `month`, `<band names>`, `export_kwh`, `demand_kw`. Cycles columns: `cycle`, `<band names>`, `export_kwh`, `demand_kw`, `days_in_cycle`.
+
+---
+
+### `estimate_costs(bill, plan, *, pay_on_time_discount, include_gst, gst_rate)`
+
+Estimate dollar costs from a billables DataFrame.
+
+```python
+costs = ml.pricing.estimate_costs(bill, plan)
+
+costs = ml.pricing.estimate_costs(
+    bill,
+    plan,
+    pay_on_time_discount=0.07,   # 7% discount
+    include_gst=True,
+    gst_rate=0.10,
+)
+```
+
+**Parameters:**
+- `bill` (pl.DataFrame) — output from `compute_billables`
+- `plan` (Plan) — tariff plan (rates used for cost calculation)
+- `pay_on_time_discount` (float) — fractional discount applied to charges. Default: `0.0`
+- `include_gst` (bool, optional) — include GST. Default: `config.INCLUDE_GST` (`False`)
+- `gst_rate` (float, optional) — GST rate. Default: `config.GST_RATE` (`0.10`)
+
+**Returns:** `pl.DataFrame` with columns: `month` or `cycle`, `energy_cost`, `demand_cost`, `fixed_cost`, `feed_in_credit`, `pay_on_time_discount`, `gst`, `total`.
+
+---
+
+## `scenario`
+
+### `run(df, *, ev, pv, battery, plan)`
+
+Simulate EV charging, PV generation, and battery storage against a baseline load.
+
+```python
+ev = ml.types.EVConfig(
+    daily_kwh=8.0, max_kw=7.0,
+    window_start="18:00", window_end="22:00",
+    days="ALL", strategy="immediate",
+)
+pv = ml.types.PVConfig(
+    system_kwp=6.6, inverter_kw=5.0,
+    loss_fraction=0.15,
+    seasonal_scale={"01": 1.05, "06": 0.90},
+)
+bat = ml.types.BatteryConfig(
+    capacity_kwh=10.0, max_kw=5.0,
+    round_trip_eff=0.9, soc_min=0.1, soc_max=0.95,
+)
+
+result = ml.scenario.run(df, ev=ev, pv=pv, battery=bat, plan=plan)
+```
+
+All device parameters are optional — pass only the components you want to model.
+
+**Returns:** `ScenarioResult` TypedDict with `before`, `after` DataFrames, `summary`, `costs` (if plan provided), and `deltas`.
+
+---
+
+## `insights`
+
+### `generate_insights(df, ...)`
+
+Run all configured evaluators and return a list of insights.
+
+```python
+insights = ml.insights.generate_insights(df)
+
+for i in insights:
+    print(i.title, i.severity, i.category)
+```
+
+**Returns:** `list[Insight]`
+
+Each `Insight` has: `title`, `message`, `severity` (`"info"` | `"notice"` | `"warning"` | `"critical"`), `category` (`"usage"` | `"tariff"` | `"solar"` | `"scenario"` | `"data_quality"`), `tags`, `metrics`, `extras`.
+
+---
+
+## `config`
+
+Package-level configuration defaults. Override before calling functions.
+
 ```python
 import meterdatalogic as ml
 
-# Basic usage
-billables = ml.pricing.compute_billables(df, plan, mode="monthly")
-
-# Include optional flows
-billables_extended = ml.pricing.compute_billables(
-    df, 
-    plan, 
-    mode="monthly",
-    include_controlled_load=True,
-    include_total_import=True
-)
-# Returns: month, TOU bands, export_kwh, demand_kw, controlled_load_kwh, total_import_kwh
+ml.config.DEFAULT_TZ = "Australia/Sydney"
+ml.config.DEFAULT_HEMISPHERE = "southern"
+ml.config.GST_RATE = 0.10
+ml.config.INCLUDE_GST = False
 ```
 
-**Plan Structure:**
+---
+
+## Types (`ml.types`)
+
+### `ToUBand`
+
 ```python
-plan = ml.types.Plan(
-    usage_bands=[
-        ml.types.ToUBand("peak", "16:00", "21:00", 45.0),
-        ml.types.ToUBand("offpeak", "21:00", "16:00", 22.0),
-    ],
-    demand=ml.types.DemandCharge("16:00", "21:00", "MF", 12.0),
+ml.types.ToUBand(
+    name="peak",
+    start="16:00",       # "HH:MM"
+    end="21:00",         # "HH:MM"
+    rate_c_per_kwh=45.0,
+)
+```
+
+### `DemandCharge`
+
+```python
+ml.types.DemandCharge(
+    window_start="16:00",
+    window_end="21:00",
+    days="MF",                      # "MF" (Mon–Fri) or "MS" (Mon–Sun)
+    rate_per_kw_per_month=12.0,
+)
+```
+
+### `Plan`
+
+```python
+ml.types.Plan(
+    usage_bands=[...],       # list[ToUBand]
+    demand=None,             # DemandCharge | None
     fixed_c_per_day=95.0,
     feed_in_c_per_kwh=6.0,
 )
 ```
 
-#### `estimate_costs(billables, tariff)`
+### `EVConfig`
 
-Calculate costs from billables and tariff rates.
-
-**Parameters:**
-- `billables` (DataFrame): Output from compute_billables
-- `tariff` (dict): Rate structure
-
-**Returns:** DataFrame with cost breakdown
-
-**Tariff Structure:**
 ```python
-tariff = {
-    "usage_rates": {
-        "peak": 0.35,
-        "shoulder": 0.25,
-        "offpeak": 0.15
-    },
-    "demand_rate": 15.0,  # $/kW
-    "daily_charge": 1.20,
-    "feed_in_rate": 0.08,
-    "gst": 0.10,
-    "discount": 0.05  # Pay-on-time discount
-}
-```
-
----
-
-### `scenario`
-
-What-if modeling for solar, battery, and EV.
-
-**Functions:**
-
-#### `run(df, config)`
-
-Run scenario simulation with PV/battery/EV models.
-
-**Parameters:**
-- `df` (CanonFrame): Base meter data (grid import)
-- `config` (dict): Scenario configuration
-
-**Returns:** CanonFrame with modeled flows
-
-**Config Structure:**
-```python
-config = {
-    "pv": {
-        "capacity_kw": 6.6,
-        "orientation": "north",
-        "efficiency": 0.85
-    },
-    "battery": {
-        "capacity_kwh": 13.5,
-        "max_charge_kw": 5.0,
-        "max_discharge_kw": 5.0,
-        "efficiency": 0.90
-    },
-    "ev": {
-        "capacity_kwh": 75,
-        "charge_power_kw": 7.0,
-        "charge_schedule": "offpeak"
-    }
-}
-```
-
----
-
-### `insights`
-
-Pattern detection and recommendations.
-
-**Functions:**
-
-#### `generate_insights(df, config=None, pricing_context=None, scenarios_context=None)`
-
-Generate insights from meter data, pricing, and scenarios.
-
-**Parameters:**
-- `df` (CanonFrame): Input meter data
-- `config` (InsightConfig, optional): Evaluator configuration
-- `pricing_context` (PricingContext, optional): Pricing data for analysis
-- `scenarios_context` (ScenariosContext, optional): Scenario results
-
-**Returns:** List of Insight objects
-
-**Example:**
-```python
-insights = ml.insights.generate_insights(
-    df,
-    pricing_context={
-        "plan": plan,
-        "billables": billables,
-        "costs": costs
-    }
+ml.types.EVConfig(
+    daily_kwh=8.0,
+    max_kw=7.0,
+    window_start="18:00",
+    window_end="22:00",
+    days="ALL",            # "ALL", "MF", or "MS"
+    strategy="immediate",  # "immediate" or "off_peak"
 )
-
-for insight in insights:
-    print(f"{insight.level}: {insight.message}")
 ```
 
-**Insight Levels:**
-- `observation` - Neutral data pattern
-- `opportunity` - Potential for optimization
-- `recommendation` - Actionable suggestion
-- `alert` - Requires attention
+### `PVConfig`
 
----
-
-### `formats`
-
-Convert between CanonFrame and JSON-ready formats.
-
-**Functions:**
-
-#### `to_logical(df)`
-
-Convert CanonFrame to JSON-ready LogicalCanon format.
-
-**Returns:** Dictionary with timezone-naive ISO strings
-
-#### `from_logical(data, tz="Australia/Brisbane")`
-
-Convert LogicalCanon to CanonFrame.
-
-**Parameters:**
-- `data` (dict): LogicalCanon dictionary
-- `tz` (str): Timezone to apply
-
-**Returns:** CanonFrame
-
----
-
-### `utils`
-
-Helper functions.
-
-**Functions:**
-
-#### `month_label(dt)`
-
-Generate human-readable month label.
-
-**Example:** "Jan 2025"
-
-#### `build_canon_frame(data, tz="Australia/Brisbane")`
-
-Construct a CanonFrame from dictionary data.
-
----
-
-## Types
-
-### `CanonFrame`
-
-Type alias for `pd.DataFrame` with canonical schema.
-
-### `TouBand`
-
-TypedDict for Time-of-Use band definition:
 ```python
-{
-    "label": str,
-    "weekdays": list[int] | None,  # 0=Mon, 6=Sun, None=all days
-    "start_hour": int | None,
-    "end_hour": int | None  # 24-hour format
-}
+ml.types.PVConfig(
+    system_kwp=6.6,
+    inverter_kw=5.0,
+    loss_fraction=0.15,
+    seasonal_scale={"01": 1.05, "06": 0.90},  # month string → scale factor
+)
 ```
 
-### `Flow`
+### `BatteryConfig`
 
-Literal type: `"grid_import" | "controlled_load_import" | "grid_export_solar"`
-
-### `Plan`
-
-TypedDict for tariff plan configuration.
-
-### `Insight`
-
-Dataclass for insight results:
 ```python
-@dataclass
-class Insight:
-    level: InsightLevel
-    category: InsightCategory
-    message: str
-    severity: InsightSeverity
-    confidence: float
-    metadata: dict
-```
-
----
-
-## Exceptions
-
-### `CanonError`
-
-Raised when DataFrame violates canonical schema requirements.
-
-**Common causes:**
-- Missing required columns
-- Index not DatetimeIndex or not named "t_start"
-- Timezone-naive timestamps
-- Duplicate timestamps
-- Unsorted index
-- Inconsistent cadence values
-
-**Example:**
-```python
-try:
-    ml.validate.assert_canon(df)
-except ml.exceptions.CanonError as e:
-    print(f"Schema violation: {e}")
+ml.types.BatteryConfig(
+    capacity_kwh=10.0,
+    max_kw=5.0,
+    round_trip_eff=0.9,
+    soc_min=0.1,
+    soc_max=0.95,
+)
 ```

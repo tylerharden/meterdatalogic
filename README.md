@@ -113,7 +113,7 @@ ml.insights    # Automated pattern detection and recommendations
 
 Every dataset processed conforms to the canonical schema:
 
-- Index t_start: tz-aware DatetimeIndex, strictly increasing.
+- Column t_start: tz-aware Datetime column, strictly increasing.
 - Columns:
   - nmi: str (single site per frame).
   - channel: str (source register label, e.g., E1, B1).
