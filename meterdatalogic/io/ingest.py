@@ -16,23 +16,20 @@ else:
         NEMFile = None  # type: ignore[assignment,misc]
 
 
-def _infer_group_cadence(g: pl.DataFrame) -> pl.DataFrame:
-    cadence = utils.infer_cadence_minutes(g["t_start"])
-    return pl.DataFrame(
-        {
-            "nmi": [g["nmi"][0]],
-            "channel": [g["channel"][0]],
-            "cadence_min": [cadence],
-        }
-    )
-
-
 def _attach_cadence_per_group(df: pl.DataFrame) -> pl.DataFrame:
     """Infer cadence in minutes per (nmi, channel) group and attach as a column."""
     if df.is_empty():
         return df.with_columns(pl.lit(None).cast(pl.Int32).alias("cadence_min"))
 
-    cadence_df = df.group_by(["nmi", "channel"]).map_groups(_infer_group_cadence)
+    cadence_df = df.group_by(["nmi", "channel"]).map_groups(
+        lambda g: pl.DataFrame(
+            {
+                "nmi": [g["nmi"][0]],
+                "channel": [g["channel"][0]],
+                "cadence_min": [utils.infer_cadence_minutes(g["t_start"])],
+            }
+        )
+    )
 
     out = df.join(cadence_df, on=["nmi", "channel"], how="left").with_columns(
         pl.col("cadence_min").cast(pl.Int32)

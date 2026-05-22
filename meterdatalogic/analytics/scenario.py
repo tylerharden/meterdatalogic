@@ -181,7 +181,7 @@ def run(
     import_arr = _agg_to_ts(df_imp)
     export_arr = _agg_to_ts(df_exp)
 
-    interval_h = utils.interval_hours(df)
+    interval_h = utils.infer_cadence_minutes(df["t_start"]) / 60.0
 
     ev_arr = (
         _apply_ev(all_ts, ev, interval_h)

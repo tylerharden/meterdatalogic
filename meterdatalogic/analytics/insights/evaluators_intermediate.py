@@ -14,7 +14,7 @@ def seasonal_variation(
 ) -> Optional[Insight]:
     if df.is_empty():
         return None
-    monthly = transform.period_breakdown(df, freq="1MS", labels="month")["total"]
+    monthly = transform.period_breakdown(df, freq="1mo", labels="month")["total"]
     if monthly.is_empty() or len(monthly) < config.intermediate.min_months_required:
         return None
 
@@ -128,7 +128,7 @@ def peak_demand_characteristics(
         return None
     daily = transform.demand_window(
         df,
-        freq="1D",
+        freq="1d",
         stat="max",
         window_start=config.intermediate.demand_window_start,
         window_end=config.intermediate.demand_window_end,

@@ -76,7 +76,8 @@ def summarise(
     cadence = utils.infer_cadence_minutes(ts_col, default=config.DEFAULT_CADENCE_MIN)
 
     totals = utils.compute_flow_totals(df)
-    total_import_kwh, solar_export_kwh = utils.total_import_export(totals)
+    total_import_kwh = float(sum(totals.get(k, 0.0) for k in totals if "import" in k))
+    solar_export_kwh = float(sum(totals.get(k, 0.0) for k in totals if "export" in k))
     per_day_avg = (total_import_kwh / days) if days else 0.0
 
     if len(df):
@@ -94,8 +95,8 @@ def summarise(
 
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
 
-    daily_bd = transform.period_breakdown(df, freq="1D", cadence_min=cadence, labels="day")
-    monthly_bd = transform.period_breakdown(df, freq="1MS", cadence_min=cadence, labels="month")
+    daily_bd = transform.period_breakdown(df, freq="1d", cadence_min=cadence, labels="day")
+    monthly_bd = transform.period_breakdown(df, freq="1mo", cadence_min=cadence, labels="month")
 
     seasons_df = transform.seasonal_totals(df, hemisphere=hemisphere)
     if not seasons_df.is_empty() and "flow" in seasons_df.columns:

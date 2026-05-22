@@ -40,10 +40,6 @@ def infer_cadence_minutes(t_start: pl.Series, default: int = DEFAULT_CADENCE_MIN
     return int(rounded.value_counts(sort=True).row(0)[0])
 
 
-def interval_hours(df: CanonFrame) -> float:
-    return infer_cadence_minutes(df["t_start"]) / 60.0
-
-
 # ---------------------------------------------------------------------------
 # Time-of-day helpers
 # ---------------------------------------------------------------------------
@@ -58,17 +54,13 @@ def parse_time_str(tstr: str) -> _time:
     return _time(int(h), int(m))
 
 
-def _seconds_since_midnight(t_start: pl.Series) -> pl.Series:
-    """Seconds since local midnight for each timestamp."""
-    h = t_start.dt.hour().cast(pl.Int64)
-    m = t_start.dt.minute().cast(pl.Int64)
-    s = t_start.dt.second().cast(pl.Int64)
-    return h * 3600 + m * 60 + s
-
-
 def time_in_range(t_start: pl.Series, start: _time, end: _time) -> pl.Series:
     """Boolean mask: timestamps whose local wall-clock time is in [start, end)."""
-    t_s = _seconds_since_midnight(t_start)
+    t_s = (
+        t_start.dt.hour().cast(pl.Int64) * 3600
+        + t_start.dt.minute().cast(pl.Int64) * 60
+        + t_start.dt.second().cast(pl.Int64)
+    )
     start_s = start.hour * 3600 + start.minute * 60 + start.second
     end_s = end.hour * 3600 + end.minute * 60 + end.second
     if start_s < end_s:
@@ -90,28 +82,6 @@ def day_mask(t_start: pl.Series, days: Literal["ALL", "MF", "MS"] = "ALL") -> pl
 
 
 # ---------------------------------------------------------------------------
-# Label helpers
-# ---------------------------------------------------------------------------
-
-
-def month_label(ts: pl.Series, tz: str | None = None) -> pl.Series:
-    """Return YYYY-MM month labels from a tz-aware Datetime Series."""
-    s = ts
-    if tz:
-        if s.dtype.time_zone is not None:
-            s = s.dt.convert_time_zone(tz)
-        else:
-            s = s.dt.replace_time_zone(tz)
-    return s.dt.strftime("%Y-%m")
-
-
-def format_period_label(ts: pl.Series, freq: str) -> pl.Series:
-    """Format timestamps as YYYY-MM-DD (freq='1D') or YYYY-MM strings."""
-    fmt = "%Y-%m-%d" if freq == "1D" else "%Y-%m"
-    return ts.dt.strftime(fmt)
-
-
-# ---------------------------------------------------------------------------
 # Flow / kWh aggregation helpers
 # ---------------------------------------------------------------------------
 
@@ -122,16 +92,6 @@ def compute_flow_totals(df: CanonFrame) -> dict[str, float]:
         return {}
     result = df.group_by("flow").agg(pl.col("kwh").sum())
     return dict(zip(result["flow"].to_list(), result["kwh"].to_list()))
-
-
-def total_import_export(flow_totals: dict[str, float]) -> tuple[float, float]:
-    """Sum all import flows and all export flows. Returns (total_import, total_export)."""
-    import_flows = [k for k in flow_totals if "import" in k]
-    export_flows = [k for k in flow_totals if "export" in k]
-    return (
-        float(sum(flow_totals.get(k, 0.0) for k in import_flows)),
-        float(sum(flow_totals.get(k, 0.0) for k in export_flows)),
-    )
 
 
 def daily_total_from_profile(profile: CanonFrame) -> float:

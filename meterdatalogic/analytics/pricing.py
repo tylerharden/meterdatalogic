@@ -9,17 +9,6 @@ from ..core.types import CanonFrame
 from ..analytics.types import Plan
 
 
-def _tznorm(ts, tz):
-    import datetime as _dt
-
-    if isinstance(ts, str):
-        ts = pl.Series([ts]).str.strptime(pl.Datetime("us"), "%Y-%m-%d").to_list()[0]
-    if isinstance(ts, _dt.datetime):
-        if ts.tzinfo is None:
-            return ts.replace(tzinfo=_dt.timezone.utc)  # placeholder; tz convert below
-    return ts
-
-
 def _label_cycles(
     t_start: pl.Series,
     cycles: Iterable[Tuple[str | object, str | object]],
@@ -243,7 +232,7 @@ def compute_billables(
         if plan.demand:
             demand = transform.demand_window(
                 df,
-                freq="1MS",
+                freq="1mo",
                 flows=["grid_import"],
                 stat="max",
                 window_start=plan.demand.window_start,

@@ -27,7 +27,7 @@ def test_window_aggregate_all_vs_mf(halfhour_rng):
     df = _mk_df(halfhour_rng)
     all_days = transform.demand_window(
         df,
-        freq="1MS",
+        freq="1mo",
         flows=["grid_import"],
         stat="max",
         window_start="16:00",
@@ -36,7 +36,7 @@ def test_window_aggregate_all_vs_mf(halfhour_rng):
     )
     mf_days = transform.demand_window(
         df,
-        freq="1MS",
+        freq="1mo",
         flows=["grid_import"],
         stat="max",
         window_start="16:00",
@@ -51,7 +51,7 @@ def test_window_aggregate_wrap_midnight(halfhour_rng):
     df = _mk_df(halfhour_rng)
     wrap = transform.demand_window(
         df,
-        freq="1MS",
+        freq="1mo",
         flows=["grid_import"],
         stat="max",
         window_start="22:00",
@@ -62,25 +62,11 @@ def test_window_aggregate_wrap_midnight(halfhour_rng):
     assert (wrap["demand_kw"] >= 0).all()
 
 
-def test_groupby_day(canon_df_one_nmi):
-    df = ingest.from_dataframe(canon_df_one_nmi)
-    day = transform.aggregate(df, freq="1D", groupby="flow", pivot=True)
-    assert "grid_import" in day.columns
-    assert len(day) >= 1
-
-
-def test_groupby_month(canon_df_one_nmi):
-    df = ingest.from_dataframe(canon_df_one_nmi)
-    month = transform.aggregate(df, freq="1MS", groupby="flow", pivot=True)
-    assert "t_start" in month.columns
-    assert len(month) >= 1
-
-
 def test_window_aggregate_basic(canon_df_one_nmi):
     df = ingest.from_dataframe(canon_df_one_nmi)
     demand = transform.demand_window(
         df,
-        freq="1MS",
+        freq="1mo",
         flows=["grid_import"],
         stat="max",
         window_start="16:00",
@@ -89,14 +75,6 @@ def test_window_aggregate_basic(canon_df_one_nmi):
     )
     assert "t_start" in demand.columns and "demand_kw" in demand.columns
     assert (demand["demand_kw"] >= 0).all()
-
-
-def test_resample_energy_no_warning(canon_df_one_nmi, recwarn):
-    df = ingest.from_dataframe(canon_df_one_nmi)
-    _ = transform.aggregate(
-        df, freq="1h", groupby=["nmi", "channel", "flow"], value_col="kwh", pivot=False
-    )
-    assert not any("FutureWarning" in str(w.message) for w in recwarn.list)
 
 
 def test_tou_bins_accepts_24_00(canon_df_one_nmi, tou_bands_basic):
