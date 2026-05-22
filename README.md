@@ -5,7 +5,7 @@ meterdatalogic is a lightweight Python package that provides data transformation
 - Canonical Data Shape — normalise datasets to a consistent schema for reliable analytics.
 - Small, Composable Modules — ingest, validate, transform, summary, pricing, scenario.
 - Framework-Agnostic — works in Django, FastAPI, notebooks, or jobs.
-- Plot-Ready Outputs — tidy DataFrames or JSON-ready dicts.
+- Plot-Ready Outputs — Polars DataFrames or JSON-ready dicts.
 - Self-Validating — schema checks for tz-aware, sorted, duplicate-free data.
 - Optimised for interval energy data — ToU, demand windows, tariff calculation.
 
@@ -13,10 +13,9 @@ meterdatalogic is a lightweight Python package that provides data transformation
 
 ### Requirements
 
-- **Python**: 3.10+
-- **pandas**: >=2.0.0 (tested with 2.3.3)
-- **numpy**: >=1.24.0
-- **nemreader**: >=0.9.2 (optional, only needed for NEM12 file parsing)
+- **Python**: 3.12+
+- **polars**: >=1.40.1
+- **nemreader**: >=1.0.0
 
 ### Timezone Handling
 
