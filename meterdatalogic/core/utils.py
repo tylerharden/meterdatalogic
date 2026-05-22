@@ -3,7 +3,7 @@ import polars as pl
 from datetime import time as _time
 from typing import Literal
 
-from . import canon
+from ..config import DEFAULT_TZ, DEFAULT_CADENCE_MIN
 from .types import CanonFrame
 
 
@@ -22,7 +22,7 @@ def ensure_tz_aware(t_start: pl.Series, tz: str) -> pl.Series:
 # Cadence inference
 # ---------------------------------------------------------------------------
 
-def infer_cadence_minutes(t_start: pl.Series, default: int = canon.DEFAULT_CADENCE_MIN) -> int:
+def infer_cadence_minutes(t_start: pl.Series, default: int = DEFAULT_CADENCE_MIN) -> int:
     """Infer cadence in minutes from a Datetime Series, ignoring duplicates."""
     ts = t_start.unique().sort()
     if len(ts) < 2:
@@ -163,7 +163,7 @@ def build_canon_frame(
     ).sort("t_start")
 
 
-def empty_canon_frame(tz: str = canon.DEFAULT_TZ) -> CanonFrame:
+def empty_canon_frame(tz: str = DEFAULT_TZ) -> CanonFrame:
     """Return an empty CanonFrame with the correct schema."""
     return pl.DataFrame(
         {

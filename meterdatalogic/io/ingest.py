@@ -5,6 +5,7 @@ from typing import IO, Optional, TYPE_CHECKING
 from ..io import validate
 from ..core import utils, canon
 from ..core.types import CanonFrame
+from ..config import DEFAULT_TZ, INGEST_KWH_COLUMN_ALIASES, INGEST_TIMESTAMP_COLUMN_ALIASES
 
 if TYPE_CHECKING:
     from nemreader import NEMFile
@@ -50,16 +51,16 @@ def _attach_cadence_per_group(df: pl.DataFrame) -> pl.DataFrame:
 def _auto_rename(df: pl.DataFrame) -> pl.DataFrame:
     cols_lower = {c.lower(): c for c in df.columns}
 
-    tcol = next((cols_lower[k] for k in canon.COMMON_TIMESTAMP_NAMES if k in cols_lower), None)
+    tcol = next((cols_lower[k] for k in INGEST_TIMESTAMP_COLUMN_ALIASES if k in cols_lower), None)
     if tcol is None:
         raise ValueError(
-            "No timestamp column found. Expected one of: t_start, timestamp, time, ts, datetime, date."
+            "No timestamp column found. Expected one of: " + ", ".join(INGEST_TIMESTAMP_COLUMN_ALIASES) + "."
         )
 
     new = df.rename({tcol: canon.INDEX_NAME}) if tcol != canon.INDEX_NAME else df
 
     if "kwh" not in new.columns:
-        for candidate in ("energy", "value", "consumption"):
+        for candidate in INGEST_KWH_COLUMN_ALIASES:
             if candidate in new.columns:
                 new = new.rename({candidate: "kwh"})
                 break
@@ -70,7 +71,7 @@ def _auto_rename(df: pl.DataFrame) -> pl.DataFrame:
 def from_dataframe(
     df: pl.DataFrame,
     *,
-    tz: str = canon.DEFAULT_TZ,
+    tz: str = DEFAULT_TZ,
     channel_map: Optional[dict[str, str]] = None,
     nmi: Optional[str] = None,
 ) -> CanonFrame:
@@ -114,7 +115,7 @@ def from_dataframe(
 def from_nem12(
     file_like: IO[bytes] | str,
     *,
-    tz: str = canon.DEFAULT_TZ,
+    tz: str = DEFAULT_TZ,
     channel_map: Optional[dict[str, str]] = None,
     nmi: Optional[str] = None,
 ) -> CanonFrame:

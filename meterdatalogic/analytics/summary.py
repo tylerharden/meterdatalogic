@@ -1,28 +1,25 @@
 from __future__ import annotations
 from typing import Literal
 
-from ..core import canon, transform, utils
+from .. import config
+from ..core import transform, utils
 from ..core.types import CanonFrame
 from .types import SummaryPayload
 from . import insights as insights_mod
 
 
 def summarise(
-    df: CanonFrame, hemisphere: Literal["northern", "southern"] = "southern"
+    df: CanonFrame, hemisphere: Literal["northern", "southern"] | None = None
 ) -> SummaryPayload:
-    WINDOWS = [
-        {"key": "overnight", "start": "00:00", "end": "05:00"},
-        {"key": "morning", "start": "05:00", "end": "09:00"},
-        {"key": "daytime", "start": "09:00", "end": "17:00"},
-        {"key": "evening", "start": "17:00", "end": "24:00"},
-    ]
+    if hemisphere is None:
+        hemisphere = config.DEFAULT_HEMISPHERE
 
     ts_col = df["t_start"]
     start = ts_col.min()
     end = ts_col.max()
     days = int((end - start).days) + 1 if (start is not None and end is not None) else 0
 
-    cadence = utils.infer_cadence_minutes(ts_col, default=canon.DEFAULT_CADENCE_MIN)
+    cadence = utils.infer_cadence_minutes(ts_col, default=config.DEFAULT_CADENCE_MIN)
 
     totals = utils.compute_flow_totals(df)
     total_import_kwh, solar_export_kwh = utils.total_import_export(totals)
@@ -84,9 +81,9 @@ def summarise(
 
     base_dict = transform.base_from_profile(prof, cadence)
     total_daily_kwh = utils.daily_total_from_profile(prof)
-    windows_stats = transform.window_stats_from_profile(prof, WINDOWS, cadence, total_daily_kwh)
+    windows_stats = transform.window_stats_from_profile(prof, config.WINDOWS, cadence, total_daily_kwh)
     peak_consumption_kw, peak_time = transform.peak_from_profile(prof, cadence)
-    topn = transform.top_n_from_profile(prof, n=4, total_value=total_daily_kwh)
+    topn = transform.top_n_from_profile(prof, n=config.SUMMARY_TOP_N, total_value=total_daily_kwh)
 
     payload: SummaryPayload = {  # type: ignore[assignment]
         "meta": {

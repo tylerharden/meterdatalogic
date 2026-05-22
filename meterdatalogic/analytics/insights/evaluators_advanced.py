@@ -125,15 +125,15 @@ def load_shifting_opportunities(
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
     total_daily_kwh = utils.daily_total_from_profile(prof)
     windows = [
-        {"key": "evening", "start": "16:00", "end": "21:00"},
-        {"key": "daytime", "start": "09:00", "end": "16:00"},
+        {"key": "evening", "start": config.advanced.load_shifting_evening_start, "end": config.advanced.load_shifting_evening_end},
+        {"key": "daytime", "start": config.advanced.load_shifting_daytime_start, "end": config.advanced.load_shifting_daytime_end},
     ]
     stats = transform.window_stats_from_profile(
         prof, windows, utils.infer_cadence_minutes(df["t_start"]), total_daily_kwh
     )
     evening = float(stats.get("evening", {}).get("share_of_daily_pct", 0.0))
     daytime = float(stats.get("daytime", {}).get("share_of_daily_pct", 0.0))
-    if evening >= 35.0 and daytime <= 30.0:
+    if evening >= config.advanced.load_shifting_evening_share_threshold and daytime <= config.advanced.load_shifting_daytime_share_threshold:
         return Insight(
             id="load_shifting_opportunities",
             level="advanced",

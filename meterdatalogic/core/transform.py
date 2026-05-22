@@ -4,6 +4,7 @@ from typing import Literal, Iterable, Optional, Sequence
 
 from . import utils
 from .types import CanonFrame
+from ..config import SUMMARY_TOP_N
 
 
 # Season definitions by hemisphere
@@ -454,7 +455,7 @@ def top_n_from_profile(
     group_by: Literal["hour"] = "hour",
     slot_col: str = "slot",
     value_col: str = "import_total",
-    n: int = 4,
+    n: int = SUMMARY_TOP_N,
     total_value: float | None = None,
 ) -> dict:
     """Generic top-N reducer from a profile dataframe.

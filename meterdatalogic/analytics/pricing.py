@@ -3,6 +3,7 @@ import bisect
 import polars as pl
 from typing import Iterable, Tuple, Literal, Optional
 
+from .. import config as _config
 from ..core import transform
 from ..core.types import CanonFrame
 from ..analytics.types import Plan
@@ -299,10 +300,14 @@ def estimate_costs(
     plan: Plan,
     *,
     pay_on_time_discount: float = 0.0,
-    include_gst: bool = False,
-    gst_rate: float = 0.10,
+    include_gst: bool | None = None,
+    gst_rate: float | None = None,
 ) -> pl.DataFrame:
     """Estimate costs from billables (monthly or cycles)."""
+    if include_gst is None:
+        include_gst = _config.INCLUDE_GST
+    if gst_rate is None:
+        gst_rate = _config.GST_RATE
     out = bill.clone()
 
     # Energy across TOU band columns

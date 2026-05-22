@@ -62,6 +62,14 @@ class AdvancedInsightsConfig:
     battery_window_end: str = "21:00"
     battery_window_days: str = "ALL"
 
+    # Load-shifting opportunity windows and thresholds
+    load_shifting_evening_start: str = "16:00"
+    load_shifting_evening_end: str = "21:00"
+    load_shifting_daytime_start: str = "09:00"
+    load_shifting_daytime_end: str = "16:00"
+    load_shifting_evening_share_threshold: float = 35.0  # >35% in evening → misaligned
+    load_shifting_daytime_share_threshold: float = 30.0  # <30% daytime → low solar use
+
     # Step change detection (overnight base usage)
     overnight_start: str = "00:00"  # Baseload period
     overnight_end: str = "05:00"

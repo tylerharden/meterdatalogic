@@ -22,9 +22,10 @@ are exposed at the top level for a simple, flat API.
 from .io import formats, ingest, validate
 from .core import canon, transform, utils
 from .analytics import pricing, scenario, summary, insights
-from . import types
+from . import config, types
 
 __all__ = [
+    "config",
     "canon",
     "types",
     "utils",

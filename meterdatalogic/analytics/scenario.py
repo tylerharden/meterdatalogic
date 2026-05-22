@@ -6,7 +6,8 @@ import polars as pl
 
 from ..analytics import pricing
 from ..io import validate
-from ..core import canon, utils
+from ..core import utils
+from ..config import DEFAULT_TZ as _DEFAULT_TZ
 from ..core.types import CanonFrame
 
 from .types import (
@@ -254,7 +255,7 @@ def run(
                 pl.col("t_start").dt.convert_time_zone(tz)
             )
     else:
-        df_after = utils.empty_canon_frame(tz=tz or canon.DEFAULT_TZ)
+        df_after = utils.empty_canon_frame(tz=tz or _DEFAULT_TZ)
 
     validate.assert_canon(df_after)
 
