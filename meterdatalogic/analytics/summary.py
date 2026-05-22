@@ -1,11 +1,65 @@
 from __future__ import annotations
 from typing import Literal
 
+import polars as pl
+
 from .. import config
 from ..core import transform, utils
 from ..core.types import CanonFrame
-from .types import SummaryPayload
+from .types import SummaryPayload, SummaryPeaks
 from . import insights as insights_mod
+
+
+def _profile_kw_stat(
+    profile: pl.DataFrame,
+    cadence_min: int,
+    *,
+    reducer: Literal["min", "max"],
+    col: str = "import_total",
+) -> tuple[float, str | None]:
+    """Return (kW, slot_label) for the min or max interval in a profile column."""
+    if profile.is_empty():
+        return 0.0, None
+    series = profile[col]
+    idx = int(series.arg_min() if reducer == "min" else series.arg_max())
+    kw = float(series[idx]) * (60.0 / cadence_min) if cadence_min else 0.0
+    return float(kw), (str(profile["slot"][idx]) if idx >= 0 else None)
+
+
+def _top_hours(
+    profile: pl.DataFrame,
+    *,
+    n: int = config.SUMMARY_TOP_N,
+    total_value: float | None = None,
+) -> dict:
+    """Top-N hours by import kWh, grouped from slot labels (HH prefix)."""
+    if profile.is_empty():
+        return {"labels": [], "value_total": 0.0, "share_pct": 0.0}
+    grouped = (
+        profile.with_columns(pl.col("slot").cast(pl.String).str.slice(0, 2).alias("_h"))
+        .group_by("_h")
+        .agg(pl.col("import_total").sum())
+        .sort("import_total", descending=True)
+    )
+    top = grouped.head(n)
+    value_total = float(top["import_total"].sum())
+    denom = float(total_value) if total_value is not None else float(profile["import_total"].sum())
+    share = (value_total / denom * 100.0) if denom > 0 else 0.0
+    return {"labels": top["_h"].to_list(), "value_total": value_total, "share_pct": float(share)}
+
+
+def _to_records(df: pl.DataFrame) -> list[dict]:
+    """Return df as a list of dicts, or [] if empty."""
+    return df.to_dicts() if not df.is_empty() else []
+
+
+def _joined_breakdown(bd: dict[str, pl.DataFrame], label_col: str) -> pl.DataFrame:
+    """Join peaks and average onto the total table from a period_breakdown result."""
+    result = bd["total"]
+    if not result.is_empty():
+        result = result.join(bd["peaks"], on=label_col, how="left")
+        result = result.join(bd["average"], on=label_col, how="left")
+    return result
 
 
 def summarise(
@@ -33,7 +87,7 @@ def summarise(
         max_interval_kwh = 0.0
         max_interval_time = None
 
-    peaks = {
+    peaks: SummaryPeaks = {
         "max_interval_kwh": max_interval_kwh,
         "max_interval_time": max_interval_time,
     }
@@ -42,31 +96,6 @@ def summarise(
 
     daily_bd = transform.period_breakdown(df, freq="1D", cadence_min=cadence, labels="day")
     monthly_bd = transform.period_breakdown(df, freq="1MS", cadence_min=cadence, labels="month")
-    days_df = daily_bd["total"]
-    months_df = monthly_bd["total"]
-
-    if not days_df.is_empty():
-        days_df = days_df.join(daily_bd["peaks"], on="day", how="left")
-        days_df = days_df.join(daily_bd["average"], on="day", how="left")
-    if not months_df.is_empty():
-        months_df = months_df.join(monthly_bd["peaks"], on="month", how="left")
-        months_df = months_df.join(monthly_bd["average"], on="month", how="left")
-
-    prof_records: list[dict] = prof.to_dicts()
-    days_total_records: list[dict] = days_df.to_dicts() if not days_df.is_empty() else []
-    days_peaks_records: list[dict] = (
-        daily_bd["peaks"].to_dicts() if not daily_bd["peaks"].is_empty() else []
-    )
-    days_avg_records: list[dict] = (
-        daily_bd["average"].to_dicts() if not daily_bd["average"].is_empty() else []
-    )
-    months_total_records: list[dict] = months_df.to_dicts() if not months_df.is_empty() else []
-    months_peaks_records: list[dict] = (
-        monthly_bd["peaks"].to_dicts() if not monthly_bd["peaks"].is_empty() else []
-    )
-    months_avg_records: list[dict] = (
-        monthly_bd["average"].to_dicts() if not monthly_bd["average"].is_empty() else []
-    )
 
     seasons_df = transform.seasonal_totals(df, hemisphere=hemisphere)
     if not seasons_df.is_empty() and "flow" in seasons_df.columns:
@@ -74,24 +103,16 @@ def summarise(
             index=["season", "year"], on="flow", values="kwh", aggregate_function="sum"
         )
 
-    seasons_records: list[dict] = seasons_df.to_dicts() if not seasons_df.is_empty() else []
-
-    start_str: str = str(start) if start is not None else ""
-    end_str: str = str(end) if end is not None else ""
-
-    base_dict = transform.base_from_profile(prof, cadence)
+    base_kw, _ = _profile_kw_stat(prof, cadence, reducer="min")
     total_daily_kwh = utils.daily_total_from_profile(prof)
-    windows_stats = transform.window_stats_from_profile(
-        prof, config.WINDOWS, cadence, total_daily_kwh
-    )
-    peak_consumption_kw, peak_time = transform.peak_from_profile(prof, cadence)
-    topn = transform.top_n_from_profile(prof, n=config.SUMMARY_TOP_N, total_value=total_daily_kwh)
+    peak_consumption_kw, peak_time = _profile_kw_stat(prof, cadence, reducer="max")
+    topn = _top_hours(prof, total_value=total_daily_kwh)
 
     payload: SummaryPayload = {  # type: ignore[assignment]
         "meta": {
             "nmis": int(df["nmi"].n_unique()) if "nmi" in df.columns else 0,
-            "start": start_str,
-            "end": end_str,
+            "start": str(start) if start is not None else "",
+            "end": str(end) if end is not None else "",
             "cadence_min": cadence,
             "days": days,
             "channels": (
@@ -101,21 +122,21 @@ def summarise(
         },
         "stats": {
             "total_import_kwh": total_import_kwh,
+            "solar_export_kwh": solar_export_kwh,
             "per_day_avg_kwh": float(per_day_avg),
             "peak_consumption_kw": float(peak_consumption_kw),
             "peak_time": peak_time,
-            "solar_export_kwh": solar_export_kwh,
             "peaks": peaks,
             "base": {
-                "base_kw": base_dict.get("base_kw", 0.0),
-                "base_kwh_per_day": base_dict.get("base_kwh_per_day", 0.0),
+                "base_kw": base_kw,
+                "base_kwh_per_day": base_kw * 24.0,
                 "share_of_daily_pct": float(
-                    (base_dict.get("base_kwh_per_day", 0.0) / total_daily_kwh * 100.0)
-                    if total_daily_kwh > 0
-                    else 0.0
+                    (base_kw * 24.0 / total_daily_kwh * 100.0) if total_daily_kwh > 0 else 0.0
                 ),
             },
-            "windows": windows_stats,
+            "windows": transform.window_stats_from_profile(
+                prof, config.WINDOWS, cadence, total_daily_kwh
+            ),
             "top_hours": {
                 "hours": topn.get("labels", []),
                 "kwh_total": float(topn.get("value_total", 0.0)),
@@ -123,18 +144,18 @@ def summarise(
             },
         },
         "datasets": {
-            "profile24": prof_records,
+            "profile24": _to_records(prof),
             "days": {
-                "total": days_total_records,
-                "peaks": days_peaks_records,
-                "average": days_avg_records,
+                "total": _to_records(_joined_breakdown(daily_bd, "day")),
+                "peaks": _to_records(daily_bd["peaks"]),
+                "average": _to_records(daily_bd["average"]),
             },
             "months": {
-                "total": months_total_records,
-                "peaks": months_peaks_records,
-                "average": months_avg_records,
+                "total": _to_records(_joined_breakdown(monthly_bd, "month")),
+                "peaks": _to_records(monthly_bd["peaks"]),
+                "average": _to_records(monthly_bd["average"]),
             },
-            "seasons": seasons_records,
+            "seasons": _to_records(seasons_df),
         },
     }
 

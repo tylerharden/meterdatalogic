@@ -47,6 +47,7 @@ class TopHours(TypedDict, total=False):
 
 class SummaryStats(TypedDict, total=False):
     total_import_kwh: float
+    solar_export_kwh: float
     per_day_avg_kwh: float
     peak_consumption_kw: float
     peak_time: Optional[str]

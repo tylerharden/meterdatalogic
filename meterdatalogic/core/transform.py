@@ -10,16 +10,16 @@ Functions:
     seasonal_totals     — aggregate kWh grouped by season, year, and flow
     tou_bins            — aggregate kWh into named time-of-use bands
     profile             — build an average-day slot profile
+    window_stats_from_profile — compute avg_kw / kwh / share for time windows
     period_breakdown    — per-day or per-month totals, peaks, and averages
 """
 
 from __future__ import annotations
 import polars as pl
-from typing import Literal, Iterable, Optional, Sequence
+from typing import Literal, Iterable, Sequence
 
 from . import utils
 from .types import CanonFrame
-from ..config import SUMMARY_TOP_N
 
 
 # Season definitions by hemisphere
@@ -349,67 +349,6 @@ def tou_bins(
     return out
 
 
-def base_from_profile(profile_with_import: pl.DataFrame, cadence_min: int) -> dict:
-    """Compute base load from average-day import profile. Returns {base_kw, base_kwh_per_day}."""
-    if profile_with_import.is_empty():
-        return {"base_kw": 0.0, "base_kwh_per_day": 0.0}
-    base_interval_kwh = float(profile_with_import["import_total"].min())
-    base_kw = base_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
-    return {"base_kw": float(base_kw), "base_kwh_per_day": float(base_kw * 24.0)}
-
-
-def window_stats_from_profile(
-    profile_with_import: pl.DataFrame,
-    windows: list[dict],
-    cadence_min: int,
-    total_daily_kwh: float | None = None,
-) -> dict:
-    """Compute avg_kw, kwh_per_day, share for configured windows using average-day profile."""
-    total = (
-        float(total_daily_kwh)
-        if total_daily_kwh is not None
-        else float(profile_with_import["import_total"].sum())
-    )
-    slot_times_py = [utils.parse_time_str(str(s)) for s in profile_with_import["slot"].to_list()]
-    out: dict[str, dict[str, float]] = {}
-    for w in windows:
-        start_t = utils.parse_time_str(str(w["start"]))
-        end_t = utils.parse_time_str(str(w["end"]))
-        mask = [
-            (t >= start_t and t < end_t) if start_t < end_t else (t >= start_t or t < end_t)
-            for t in slot_times_py
-        ]
-        window_kwh = float(profile_with_import.filter(pl.Series(mask))["import_total"].sum())
-        start_m = start_t.hour * 60 + start_t.minute
-        end_m = end_t.hour * 60 + end_t.minute
-        if end_m == 0:
-            end_m = 24 * 60
-        window_hours = (
-            (end_m - start_m) / 60.0 if end_m >= start_m else ((24 * 60 - start_m) + end_m) / 60.0
-        )
-        avg_kw = (window_kwh / window_hours) if window_hours > 0 else 0.0
-        share = (window_kwh / total * 100.0) if total > 0 else 0.0
-        out[str(w["key"])] = {
-            "avg_kw": float(avg_kw),
-            "kwh_per_day": float(window_kwh),
-            "share_of_daily_pct": float(share),
-        }
-    return out
-
-
-def peak_from_profile(
-    profile_with_import: pl.DataFrame, cadence_min: int
-) -> tuple[float, Optional[str]]:
-    """Peak kW and time from average-day profile import_total."""
-    if profile_with_import.is_empty():
-        return 0.0, None
-    peak_interval_kwh = float(profile_with_import["import_total"].max())
-    peak_kw = peak_interval_kwh * (60.0 / cadence_min) if cadence_min else 0.0
-    idx = int(profile_with_import["import_total"].arg_max())
-    t = str(profile_with_import["slot"][idx]) if idx >= 0 else None
-    return float(peak_kw), t
-
-
 def profile(
     df: CanonFrame,
     *,
@@ -459,6 +398,45 @@ def profile(
         )
 
     return prof
+
+
+def window_stats_from_profile(
+    profile_with_import: pl.DataFrame,
+    windows: list[dict],
+    cadence_min: int,
+    total_daily_kwh: float | None = None,
+) -> dict:
+    """Compute avg_kw, kwh_per_day, share for configured windows using average-day profile."""
+    total = (
+        float(total_daily_kwh)
+        if total_daily_kwh is not None
+        else float(profile_with_import["import_total"].sum())
+    )
+    slot_times_py = [utils.parse_time_str(str(s)) for s in profile_with_import["slot"].to_list()]
+    out: dict[str, dict[str, float]] = {}
+    for w in windows:
+        start_t = utils.parse_time_str(str(w["start"]))
+        end_t = utils.parse_time_str(str(w["end"]))
+        mask = [
+            (t >= start_t and t < end_t) if start_t < end_t else (t >= start_t or t < end_t)
+            for t in slot_times_py
+        ]
+        window_kwh = float(profile_with_import.filter(pl.Series(mask))["import_total"].sum())
+        start_m = start_t.hour * 60 + start_t.minute
+        end_m = end_t.hour * 60 + end_t.minute
+        if end_m == 0:
+            end_m = 24 * 60
+        window_hours = (
+            (end_m - start_m) / 60.0 if end_m >= start_m else ((24 * 60 - start_m) + end_m) / 60.0
+        )
+        avg_kw = (window_kwh / window_hours) if window_hours > 0 else 0.0
+        share = (window_kwh / total * 100.0) if total > 0 else 0.0
+        out[str(w["key"])] = {
+            "avg_kw": float(avg_kw),
+            "kwh_per_day": float(window_kwh),
+            "share_of_daily_pct": float(share),
+        }
+    return out
 
 
 def period_breakdown(
@@ -517,35 +495,3 @@ def period_breakdown(
         avg_df = pl.DataFrame({labels: pl.Series([], dtype=pl.String), "avg_interval_kwh": []})
 
     return {"total": totals, "peaks": peaks, "average": avg_df}
-
-
-def top_n_from_profile(
-    profile_df: pl.DataFrame,
-    *,
-    group_by: Literal["hour"] = "hour",
-    slot_col: str = "slot",
-    value_col: str = "import_total",
-    n: int = SUMMARY_TOP_N,
-    total_value: float | None = None,
-) -> dict:
-    """Generic top-N reducer from a profile dataframe.
-
-    Currently supports group_by='hour' on slot labels and sums value_col for ranking.
-    """
-    if group_by != "hour":
-        raise NotImplementedError("Only group_by='hour' supported")
-    if profile_df.is_empty():
-        return {"labels": [], "value_total": 0.0, "share_pct": 0.0}
-
-    grouped = (
-        profile_df.with_columns(pl.col(slot_col).cast(pl.String).str.slice(0, 2).alias("_h"))
-        .group_by("_h")
-        .agg(pl.col(value_col).sum())
-        .sort(value_col, descending=True)
-    )
-    top = grouped.head(n)
-    labels = top["_h"].to_list()
-    value_total = float(top[value_col].sum())
-    denom = float(total_value) if total_value is not None else float(profile_df[value_col].sum())
-    share = (value_total / denom * 100.0) if denom > 0 else 0.0
-    return {"labels": labels, "value_total": value_total, "share_pct": float(share)}
