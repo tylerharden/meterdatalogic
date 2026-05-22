@@ -23,7 +23,9 @@ def _import_df(ts: pl.Series, kwh=0.5) -> pl.DataFrame:
             "nmi": pl.Series(["Q1234567890"] * n),
             "channel": pl.Series(["E1"] * n),
             "flow": pl.Series(["grid_import"] * n),
-            "kwh": pl.Series([float(kwh)] * n if not hasattr(kwh, "__len__") else list(kwh), dtype=pl.Float64),
+            "kwh": pl.Series(
+                [float(kwh)] * n if not hasattr(kwh, "__len__") else list(kwh), dtype=pl.Float64
+            ),
             "cadence_min": pl.Series([30] * n, dtype=pl.Int32),
         }
     )
@@ -105,22 +107,26 @@ def test_solar_export_tracked_separately_from_import():
     n_night = len(night_ts)
     n_day = len(day_ts)
 
-    imp = pl.DataFrame({
-        "t_start": night_ts,
-        "nmi": pl.Series(["Q"] * n_night),
-        "channel": pl.Series(["E1"] * n_night),
-        "flow": pl.Series(["grid_import"] * n_night),
-        "kwh": pl.Series([0.5] * n_night, dtype=pl.Float64),
-        "cadence_min": pl.Series([30] * n_night, dtype=pl.Int32),
-    })
-    exp = pl.DataFrame({
-        "t_start": day_ts,
-        "nmi": pl.Series(["Q"] * n_day),
-        "channel": pl.Series(["B1"] * n_day),
-        "flow": pl.Series(["grid_export_solar"] * n_day),
-        "kwh": pl.Series([0.4] * n_day, dtype=pl.Float64),
-        "cadence_min": pl.Series([30] * n_day, dtype=pl.Int32),
-    })
+    imp = pl.DataFrame(
+        {
+            "t_start": night_ts,
+            "nmi": pl.Series(["Q"] * n_night),
+            "channel": pl.Series(["E1"] * n_night),
+            "flow": pl.Series(["grid_import"] * n_night),
+            "kwh": pl.Series([0.5] * n_night, dtype=pl.Float64),
+            "cadence_min": pl.Series([30] * n_night, dtype=pl.Int32),
+        }
+    )
+    exp = pl.DataFrame(
+        {
+            "t_start": day_ts,
+            "nmi": pl.Series(["Q"] * n_day),
+            "channel": pl.Series(["B1"] * n_day),
+            "flow": pl.Series(["grid_export_solar"] * n_day),
+            "kwh": pl.Series([0.4] * n_day, dtype=pl.Float64),
+            "cadence_min": pl.Series([30] * n_day, dtype=pl.Int32),
+        }
+    )
     df = ml.ingest.from_dataframe(pl.concat([imp, exp]))
     stats = ml.summary.summarise(df)["stats"]
     assert stats["total_import_kwh"] == pytest.approx(n_night * 0.5)

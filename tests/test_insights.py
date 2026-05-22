@@ -38,6 +38,7 @@ def _import_df(ts: pl.Series, kwh=0.5) -> pl.DataFrame:
 
 def test_peak_demand_characteristics_returns_none_on_empty():
     from meterdatalogic import utils
+
     df = utils.empty_canon_frame(tz=TZ)
     assert evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig()) is None
 
@@ -63,10 +64,7 @@ def test_peak_demand_characteristics_spiky_data_triggers_warning():
     ts = _ts_range("2025-01-01T00:00:00", 48 * 14, 30)
     ts_list = ts.to_list()
     spike_date = _dt.date(2025, 1, 4)
-    kwh_arr = [
-        5.0 if t.date() == spike_date and 16 <= t.hour < 21 else 0.2
-        for t in ts_list
-    ]
+    kwh_arr = [5.0 if t.date() == spike_date and 16 <= t.hour < 21 else 0.2 for t in ts_list]
     df = ingest.from_dataframe(_import_df(ts, kwh=kwh_arr))
     result = evaluators_intermediate.peak_demand_characteristics(df, config=InsightConfig())
     assert result is not None
@@ -81,6 +79,7 @@ def test_peak_demand_characteristics_spiky_data_triggers_warning():
 
 def test_step_change_baseload_returns_none_on_empty():
     from meterdatalogic import utils
+
     df = utils.empty_canon_frame(tz=TZ)
     assert evaluators_advanced.step_change_baseload(df, config=InsightConfig()) is None
 

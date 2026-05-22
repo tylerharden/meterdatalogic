@@ -15,7 +15,9 @@ def _mk_df(ts: pl.Series, kwh=1.0, flow="grid_import") -> pl.DataFrame:
             "nmi": pl.Series(["Q123"] * n),
             "channel": pl.Series(["E1"] * n),
             "flow": pl.Series([flow] * n),
-            "kwh": pl.Series([float(kwh)] * n if not hasattr(kwh, "__len__") else list(kwh), dtype=pl.Float64),
+            "kwh": pl.Series(
+                [float(kwh)] * n if not hasattr(kwh, "__len__") else list(kwh), dtype=pl.Float64
+            ),
             "cadence_min": pl.Series([cadence] * n, dtype=pl.Int32),
         }
     )

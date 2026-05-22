@@ -11,6 +11,7 @@ from .types import CanonFrame
 # Timezone helpers
 # ---------------------------------------------------------------------------
 
+
 def ensure_tz_aware(t_start: pl.Series, tz: str) -> pl.Series:
     """Return a tz-aware Datetime Series, localising or converting as needed."""
     if t_start.dtype.time_zone is None:
@@ -21,6 +22,7 @@ def ensure_tz_aware(t_start: pl.Series, tz: str) -> pl.Series:
 # ---------------------------------------------------------------------------
 # Cadence inference
 # ---------------------------------------------------------------------------
+
 
 def infer_cadence_minutes(t_start: pl.Series, default: int = DEFAULT_CADENCE_MIN) -> int:
     """Infer cadence in minutes from a Datetime Series, ignoring duplicates."""
@@ -45,6 +47,7 @@ def interval_hours(df: CanonFrame) -> float:
 # ---------------------------------------------------------------------------
 # Time-of-day helpers
 # ---------------------------------------------------------------------------
+
 
 def parse_time_str(tstr: str) -> _time:
     """Parse an HH:MM time string. '24:00' is treated as midnight (00:00)."""
@@ -80,15 +83,16 @@ def day_mask(t_start: pl.Series, days: Literal["ALL", "MF", "MS"] = "ALL") -> pl
         return pl.Series([True] * len(t_start), dtype=pl.Boolean)
     dow = t_start.dt.weekday()
     if days == "MF":
-        return dow <= 5   # Mon=1 … Fri=5
+        return dow <= 5  # Mon=1 … Fri=5
     if days == "MS":
-        return dow <= 6   # Mon=1 … Sat=6
+        return dow <= 6  # Mon=1 … Sat=6
     return pl.Series([True] * len(t_start), dtype=pl.Boolean)
 
 
 # ---------------------------------------------------------------------------
 # Label helpers
 # ---------------------------------------------------------------------------
+
 
 def month_label(ts: pl.Series, tz: str | None = None) -> pl.Series:
     """Return YYYY-MM month labels from a tz-aware Datetime Series."""
@@ -110,6 +114,7 @@ def format_period_label(ts: pl.Series, freq: str) -> pl.Series:
 # ---------------------------------------------------------------------------
 # Flow / kWh aggregation helpers
 # ---------------------------------------------------------------------------
+
 
 def compute_flow_totals(df: CanonFrame) -> dict[str, float]:
     """Total kWh by flow name from a canonical DataFrame."""
@@ -140,6 +145,7 @@ def daily_total_from_profile(profile: CanonFrame) -> float:
 # Canon frame construction
 # ---------------------------------------------------------------------------
 
+
 def build_canon_frame(
     t_start: pl.Series,
     kwh: pl.Series | list[float],
@@ -150,7 +156,9 @@ def build_canon_frame(
     cadence_min: int | None,
 ) -> CanonFrame:
     n = len(t_start)
-    kwh_series = kwh.cast(pl.Float64) if isinstance(kwh, pl.Series) else pl.Series(kwh, dtype=pl.Float64)
+    kwh_series = (
+        kwh.cast(pl.Float64) if isinstance(kwh, pl.Series) else pl.Series(kwh, dtype=pl.Float64)
+    )
     return pl.DataFrame(
         {
             "t_start": t_start,

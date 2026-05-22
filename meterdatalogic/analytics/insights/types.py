@@ -33,6 +33,7 @@ class Insight:
 @dataclass
 class PricingContext:
     """Optional pricing comparison context (polars DataFrames with a 'total' column)."""
+
     current_plan: str
     costs_by_plan: Mapping[str, pl.DataFrame]
 
@@ -40,6 +41,7 @@ class PricingContext:
 @dataclass
 class ScenariosContext:
     """Optional scenario results context."""
+
     scenarios: Mapping[str, ScenarioResult]
 
 

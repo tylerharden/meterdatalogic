@@ -54,11 +54,19 @@ def summarise(
 
     prof_records: list[dict] = prof.to_dicts()
     days_total_records: list[dict] = days_df.to_dicts() if not days_df.is_empty() else []
-    days_peaks_records: list[dict] = daily_bd["peaks"].to_dicts() if not daily_bd["peaks"].is_empty() else []
-    days_avg_records: list[dict] = daily_bd["average"].to_dicts() if not daily_bd["average"].is_empty() else []
+    days_peaks_records: list[dict] = (
+        daily_bd["peaks"].to_dicts() if not daily_bd["peaks"].is_empty() else []
+    )
+    days_avg_records: list[dict] = (
+        daily_bd["average"].to_dicts() if not daily_bd["average"].is_empty() else []
+    )
     months_total_records: list[dict] = months_df.to_dicts() if not months_df.is_empty() else []
-    months_peaks_records: list[dict] = monthly_bd["peaks"].to_dicts() if not monthly_bd["peaks"].is_empty() else []
-    months_avg_records: list[dict] = monthly_bd["average"].to_dicts() if not monthly_bd["average"].is_empty() else []
+    months_peaks_records: list[dict] = (
+        monthly_bd["peaks"].to_dicts() if not monthly_bd["peaks"].is_empty() else []
+    )
+    months_avg_records: list[dict] = (
+        monthly_bd["average"].to_dicts() if not monthly_bd["average"].is_empty() else []
+    )
 
     seasons_df = transform.aggregate(
         df,
@@ -81,7 +89,9 @@ def summarise(
 
     base_dict = transform.base_from_profile(prof, cadence)
     total_daily_kwh = utils.daily_total_from_profile(prof)
-    windows_stats = transform.window_stats_from_profile(prof, config.WINDOWS, cadence, total_daily_kwh)
+    windows_stats = transform.window_stats_from_profile(
+        prof, config.WINDOWS, cadence, total_daily_kwh
+    )
     peak_consumption_kw, peak_time = transform.peak_from_profile(prof, cadence)
     topn = transform.top_n_from_profile(prof, n=config.SUMMARY_TOP_N, total_value=total_daily_kwh)
 
@@ -92,7 +102,9 @@ def summarise(
             "end": end_str,
             "cadence_min": cadence,
             "days": days,
-            "channels": (sorted(df["channel"].unique().to_list()) if "channel" in df.columns else []),
+            "channels": (
+                sorted(df["channel"].unique().to_list()) if "channel" in df.columns else []
+            ),
             "flows": sorted(df["flow"].unique().to_list()) if "flow" in df.columns else [],
         },
         "stats": {
@@ -107,7 +119,8 @@ def summarise(
                 "base_kwh_per_day": base_dict.get("base_kwh_per_day", 0.0),
                 "share_of_daily_pct": float(
                     (base_dict.get("base_kwh_per_day", 0.0) / total_daily_kwh * 100.0)
-                    if total_daily_kwh > 0 else 0.0
+                    if total_daily_kwh > 0
+                    else 0.0
                 ),
             },
             "windows": windows_stats,

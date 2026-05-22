@@ -54,7 +54,9 @@ def _auto_rename(df: pl.DataFrame) -> pl.DataFrame:
     tcol = next((cols_lower[k] for k in INGEST_TIMESTAMP_COLUMN_ALIASES if k in cols_lower), None)
     if tcol is None:
         raise ValueError(
-            "No timestamp column found. Expected one of: " + ", ".join(INGEST_TIMESTAMP_COLUMN_ALIASES) + "."
+            "No timestamp column found. Expected one of: "
+            + ", ".join(INGEST_TIMESTAMP_COLUMN_ALIASES)
+            + "."
         )
 
     new = df.rename({tcol: canon.INDEX_NAME}) if tcol != canon.INDEX_NAME else df

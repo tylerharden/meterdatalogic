@@ -18,20 +18,24 @@ def seasonal_variation(
     if monthly.is_empty() or len(monthly) < config.intermediate.min_months_required:
         return None
 
-    monthly = monthly.with_columns(
-        pl.col("month").str.slice(-2).alias("mm")
-    )
+    monthly = monthly.with_columns(pl.col("month").str.slice(-2).alias("mm"))
     flow_cols = [c for c in monthly.columns if "import" in str(c) and c not in ("month", "mm")]
     if not flow_cols:
         flow_cols = [c for c in monthly.columns if c not in ("month", "total_kwh", "mm")]
 
-    float_cols = [c for c in flow_cols if monthly[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+    float_cols = [
+        c for c in flow_cols if monthly[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+    ]
     monthly = monthly.with_columns(
         pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("import_kwh")
     )
 
-    warm = float(monthly.filter(pl.col("mm").is_in(config.intermediate.warm_months))["import_kwh"].sum())
-    cool = float(monthly.filter(pl.col("mm").is_in(config.intermediate.cool_months))["import_kwh"].sum())
+    warm = float(
+        monthly.filter(pl.col("mm").is_in(config.intermediate.warm_months))["import_kwh"].sum()
+    )
+    cool = float(
+        monthly.filter(pl.col("mm").is_in(config.intermediate.cool_months))["import_kwh"].sum()
+    )
 
     if warm == 0 and cool == 0:
         return None
@@ -69,7 +73,9 @@ def tariff_suitability(
             return 0.0
         if "total" in d.columns:
             return float(d["total"].fill_null(0.0).sum())
-        num_cols = [c for c in d.columns if d[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+        num_cols = [
+            c for c in d.columns if d[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+        ]
         return float(sum(d[c].sum() for c in num_cols))
 
     costs = {name: _annual_total(df_) for name, df_ in pricing.costs_by_plan.items()}

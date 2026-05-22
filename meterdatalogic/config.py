@@ -29,7 +29,14 @@ DEFAULT_CADENCE_MIN: int = 30
 # io.ingest
 # ---------------------------------------------------------------------------
 
-INGEST_TIMESTAMP_COLUMN_ALIASES: tuple[str, ...] = ("t_start", "timestamp", "time", "ts", "datetime", "date")
+INGEST_TIMESTAMP_COLUMN_ALIASES: tuple[str, ...] = (
+    "t_start",
+    "timestamp",
+    "time",
+    "ts",
+    "datetime",
+    "date",
+)
 """Column name aliases recognised as the timestamp column during auto-rename."""
 
 INGEST_KWH_COLUMN_ALIASES: tuple[str, ...] = ("energy", "value", "consumption")

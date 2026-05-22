@@ -127,17 +127,13 @@ def aggregate(
 
     # Optional time window filter
     if window_start is not None and window_end is not None:
-        mask = _time_window_mask(
-            s["t_start"], start=window_start, end=window_end, days=window_days
-        )
+        mask = _time_window_mask(s["t_start"], start=window_start, end=window_end, days=window_days)
         s = s.filter(mask)
         if s.is_empty():
             base_name = out_col or ("demand_kw" if metric == "kW" else value_col)
             if pivot and groupby:
                 return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us"))})
-            return pl.DataFrame(
-                {"t_start": pl.Series([], dtype=pl.Datetime("us")), base_name: []}
-            )
+            return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), base_name: []})
 
     if metric == "kW":
         val_series = _compute_power_from_energy(s, energy_col=value_col)
@@ -186,13 +182,11 @@ def aggregate(
     if freq is None:
         # Aggregate without resampling
         if grp_cols:
-            out = (
-                s.group_by(grp_cols)
-                .agg(_agg_expr("_val", effective_stat).alias(base_name))
-            )
+            out = s.group_by(grp_cols).agg(_agg_expr("_val", effective_stat).alias(base_name))
         else:
             agg_val = float(
-                s["_val"].max() if effective_stat == "max"
+                s["_val"].max()
+                if effective_stat == "max"
                 else (s["_val"].mean() if effective_stat == "mean" else s["_val"].sum())
             )
             out = pl.DataFrame({base_name: [agg_val]})
@@ -208,9 +202,11 @@ def aggregate(
         if pivot:
             # Only single-column groupby supported for pivot
             pivot_col = grp_cols[0]
-            out = res.pivot(
-                index="t_start", on=pivot_col, values=base_name, aggregate_function="sum"
-            ).fill_null(0.0).sort("t_start")
+            out = (
+                res.pivot(index="t_start", on=pivot_col, values=base_name, aggregate_function="sum")
+                .fill_null(0.0)
+                .sort("t_start")
+            )
         else:
             out = res.sort("t_start")
 
@@ -236,11 +232,15 @@ def aggregate(
             if hemisphere and "season" in out.columns and "year" in out.columns:
                 season_months_def = SEASON_DEFINITIONS[hemisphere]
                 season_order = {name: i for i, name in enumerate(season_months_def)}
-                out = out.with_columns(
-                    pl.col("season")
-                    .map_elements(lambda s: season_order.get(s, 99), return_dtype=pl.Int32)
-                    .alias("_order")
-                ).sort(["year", "_order"]).drop("_order")
+                out = (
+                    out.with_columns(
+                        pl.col("season")
+                        .map_elements(lambda s: season_order.get(s, 99), return_dtype=pl.Int32)
+                        .alias("_order")
+                    )
+                    .sort(["year", "_order"])
+                    .drop("_order")
+                )
 
     return out
 
@@ -261,7 +261,10 @@ def tou_bins(
     if s.is_empty():
         names = [str(b["name"]) for b in bands_list]
         return pl.DataFrame(
-            {"month": pl.Series([], dtype=pl.String), **{n: pl.Series([], dtype=pl.Float64) for n in names}}
+            {
+                "month": pl.Series([], dtype=pl.String),
+                **{n: pl.Series([], dtype=pl.Float64) for n in names},
+            }
         )
 
     s = s.with_columns(_assign_time_bands(s["t_start"], bands_list).alias("band"))
@@ -273,13 +276,13 @@ def tou_bins(
         .agg(pl.col(value_col).sum())
     )
 
-    out = grouped.pivot(
-        index="t_start", on="band", values=value_col, aggregate_function="sum"
-    ).fill_null(0.0).sort("t_start")
+    out = (
+        grouped.pivot(index="t_start", on="band", values=value_col, aggregate_function="sum")
+        .fill_null(0.0)
+        .sort("t_start")
+    )
 
-    out = out.with_columns(
-        pl.col("t_start").dt.strftime("%Y-%m").alias("month")
-    ).drop("t_start")
+    out = out.with_columns(pl.col("t_start").dt.strftime("%Y-%m").alias("month")).drop("t_start")
 
     return out
 
@@ -367,13 +370,16 @@ def profile(
     s = s.with_columns(pl.col("t_start").dt.strftime(slot_fmt).alias("slot"))
 
     agg_expr = (
-        pl.col("kwh").mean() if reducer == "mean"
+        pl.col("kwh").mean()
+        if reducer == "mean"
         else (pl.col("kwh").sum() if reducer == "sum" else pl.col("kwh").max())
     )
     grouped = s.group_by(["slot", pivot_by]).agg(agg_expr)
-    prof = grouped.pivot(
-        index="slot", on=pivot_by, values="kwh", aggregate_function="first"
-    ).fill_null(0.0).sort("slot")
+    prof = (
+        grouped.pivot(index="slot", on=pivot_by, values="kwh", aggregate_function="first")
+        .fill_null(0.0)
+        .sort("slot")
+    )
 
     if include_import_total:
         flow_cols = [c for c in prof.columns if c != "slot"]
@@ -383,7 +389,9 @@ def profile(
             cols = [c for c in flow_cols if "import" in str(c)]
             if not cols:
                 cols = flow_cols
-        float_cols = [c for c in cols if prof[c].dtype in (pl.Float64, pl.Float32, pl.Int32, pl.Int64)]
+        float_cols = [
+            c for c in cols if prof[c].dtype in (pl.Float64, pl.Float32, pl.Int32, pl.Int64)
+        ]
         prof = prof.with_columns(
             pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("import_total")
         )
@@ -414,7 +422,9 @@ def period_breakdown(
             pl.col(labels).dt.strftime(label_fmt).alias(labels)
         )
         flow_cols = [c for c in totals.columns if c != labels]
-        float_cols = [c for c in flow_cols if totals[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+        float_cols = [
+            c for c in flow_cols if totals[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+        ]
         totals = totals.with_columns(
             pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("total_kwh")
         )
@@ -442,9 +452,7 @@ def period_breakdown(
             avg_df = avg_df.with_columns(pl.lit(0.0).alias("avg_interval_kwh"))
         avg_df = avg_df.select([labels, "avg_interval_kwh"])
     else:
-        avg_df = pl.DataFrame(
-            {labels: pl.Series([], dtype=pl.String), "avg_interval_kwh": []}
-        )
+        avg_df = pl.DataFrame({labels: pl.Series([], dtype=pl.String), "avg_interval_kwh": []})
 
     return {"total": totals, "peaks": peaks, "average": avg_df}
 
@@ -468,9 +476,7 @@ def top_n_from_profile(
         return {"labels": [], "value_total": 0.0, "share_pct": 0.0}
 
     grouped = (
-        profile_df.with_columns(
-            pl.col(slot_col).cast(pl.String).str.slice(0, 2).alias("_h")
-        )
+        profile_df.with_columns(pl.col(slot_col).cast(pl.String).str.slice(0, 2).alias("_h"))
         .group_by("_h")
         .agg(pl.col(value_col).sum())
         .sort(value_col, descending=True)

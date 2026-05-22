@@ -47,7 +47,10 @@ def ev_impact(
             }
         ]
         stats = transform.window_stats_from_profile(
-            prof, windows, utils.infer_cadence_minutes(dfx["t_start"]), total_daily_kwh,
+            prof,
+            windows,
+            utils.infer_cadence_minutes(dfx["t_start"]),
+            total_daily_kwh,
         )
         return float(stats.get("peak", {}).get("share_of_daily_pct", 0.0))
 
@@ -63,7 +66,11 @@ def ev_impact(
         title="EV charging impact",
         message=(
             f"EV charging adds ~{delta_kwh:,.0f} kWh/yr and a {direction} in annual bill of ${abs(cost_delta):,.0f}. "
-            + ("Charging appears concentrated in peak hours." if charging_in_peak else "Charging appears mostly off-peak.")
+            + (
+                "Charging appears concentrated in peak hours."
+                if charging_in_peak
+                else "Charging appears mostly off-peak."
+            )
         ),
         severity="notice",  # type: ignore[arg-type]
         metrics={
@@ -89,7 +96,13 @@ def battery_impact(
         prof = transform.profile(dfx, by="slot", reducer="mean", include_import_total=True)
         stats = transform.window_stats_from_profile(
             prof,
-            [{"key": "win", "start": config.advanced.battery_window_start, "end": config.advanced.battery_window_end}],
+            [
+                {
+                    "key": "win",
+                    "start": config.advanced.battery_window_start,
+                    "end": config.advanced.battery_window_end,
+                }
+            ],
             utils.infer_cadence_minutes(dfx["t_start"]),
         )
         return float(stats.get("win", {}).get("kwh_per_day", 0.0))
@@ -125,15 +138,26 @@ def load_shifting_opportunities(
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
     total_daily_kwh = utils.daily_total_from_profile(prof)
     windows = [
-        {"key": "evening", "start": config.advanced.load_shifting_evening_start, "end": config.advanced.load_shifting_evening_end},
-        {"key": "daytime", "start": config.advanced.load_shifting_daytime_start, "end": config.advanced.load_shifting_daytime_end},
+        {
+            "key": "evening",
+            "start": config.advanced.load_shifting_evening_start,
+            "end": config.advanced.load_shifting_evening_end,
+        },
+        {
+            "key": "daytime",
+            "start": config.advanced.load_shifting_daytime_start,
+            "end": config.advanced.load_shifting_daytime_end,
+        },
     ]
     stats = transform.window_stats_from_profile(
         prof, windows, utils.infer_cadence_minutes(df["t_start"]), total_daily_kwh
     )
     evening = float(stats.get("evening", {}).get("share_of_daily_pct", 0.0))
     daytime = float(stats.get("daytime", {}).get("share_of_daily_pct", 0.0))
-    if evening >= config.advanced.load_shifting_evening_share_threshold and daytime <= config.advanced.load_shifting_daytime_share_threshold:
+    if (
+        evening >= config.advanced.load_shifting_evening_share_threshold
+        and daytime <= config.advanced.load_shifting_daytime_share_threshold
+    ):
         return Insight(
             id="load_shifting_opportunities",
             level="advanced",
@@ -168,7 +192,11 @@ def step_change_baseload(
         window_start=config.advanced.overnight_start,
         window_end=config.advanced.overnight_end,
     )
-    col = "kwh" if "kwh" in daily_df.columns else ([c for c in daily_df.columns if c != "t_start"] or [None])[0]
+    col = (
+        "kwh"
+        if "kwh" in daily_df.columns
+        else ([c for c in daily_df.columns if c != "t_start"] or [None])[0]
+    )
     if col is None or daily_df.is_empty():
         return None
     daily_df = daily_df.drop_nulls(subset=[col])

@@ -8,14 +8,16 @@ from meterdatalogic import validate
 
 def test_assert_canon_rejects_non_monotonic(halfhour_rng):
     ts = halfhour_rng.gather([1, 0, 2])
-    df = pl.DataFrame({
-        "t_start": ts,
-        "nmi": ["Q"] * 3,
-        "channel": ["E1"] * 3,
-        "flow": ["grid_import"] * 3,
-        "kwh": [1.0] * 3,
-        "cadence_min": [30, 30, 30],
-    })
+    df = pl.DataFrame(
+        {
+            "t_start": ts,
+            "nmi": ["Q"] * 3,
+            "channel": ["E1"] * 3,
+            "flow": ["grid_import"] * 3,
+            "kwh": [1.0] * 3,
+            "cadence_min": [30, 30, 30],
+        }
+    )
     with pytest.raises(Exception):
         validate.assert_canon(df)
 

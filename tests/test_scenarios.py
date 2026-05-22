@@ -105,8 +105,12 @@ def test_apply_ev_immediate_wraparound_window_starts_at_window_start():
     )
     s = scenario._apply_ev(idx, cfg, interval_h=0.5)
 
-    midnight_mask = utils.time_in_range(idx, utils.parse_time_str("00:00"), utils.parse_time_str("07:00"))
-    evening_mask = utils.time_in_range(idx, utils.parse_time_str("18:00"), utils.parse_time_str("00:00"))
+    midnight_mask = utils.time_in_range(
+        idx, utils.parse_time_str("00:00"), utils.parse_time_str("07:00")
+    )
+    evening_mask = utils.time_in_range(
+        idx, utils.parse_time_str("18:00"), utils.parse_time_str("00:00")
+    )
 
     midnight_total = s.filter(midnight_mask).sum()
     assert midnight_total < 1e-9, (
@@ -191,14 +195,16 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
 
     def fake_price_accept_kwargs(d, plan, **kwargs):
         called["pricing"] = True
-        return pl.DataFrame({
-            "month": ["2025-01"],
-            "energy_cost": [100.0],
-            "demand_cost": [0.0],
-            "fixed_cost": [23.45],
-            "feed_in_credit": [0.0],
-            "total": [123.45],
-        })
+        return pl.DataFrame(
+            {
+                "month": ["2025-01"],
+                "energy_cost": [100.0],
+                "demand_cost": [0.0],
+                "fixed_cost": [23.45],
+                "feed_in_credit": [0.0],
+                "total": [123.45],
+            }
+        )
 
     monkeypatch.setattr(scenario.pricing, "estimate_costs", fake_price_accept_kwargs, raising=True)
 
@@ -599,12 +605,20 @@ def solar_customer_df(day_30min):
     day_ts = day_30min.filter(pl.Series(day_mask_arr))
 
     imp = utils.build_canon_frame(
-        night_ts, [0.5] * len(night_ts),
-        nmi="Q", channel="E1", flow="grid_import", cadence_min=30,
+        night_ts,
+        [0.5] * len(night_ts),
+        nmi="Q",
+        channel="E1",
+        flow="grid_import",
+        cadence_min=30,
     )
     exp = utils.build_canon_frame(
-        day_ts, [0.4] * len(day_ts),
-        nmi="Q", channel="B1", flow="grid_export_solar", cadence_min=30,
+        day_ts,
+        [0.4] * len(day_ts),
+        nmi="Q",
+        channel="B1",
+        flow="grid_export_solar",
+        cadence_min=30,
     )
     return pl.concat([imp, exp]).sort("t_start")
 
@@ -710,9 +724,9 @@ def test_ev_on_solar_customer_no_simultaneous_import_and_export(solar_customer_d
     after_export = _series_from_after(result.df_after, day_30min, "grid_export_solar")
 
     both_positive = [i > 1e-9 and e > 1e-9 for i, e in zip(after_import, after_export)]
-    assert not any(both_positive), (
-        f"Simultaneous import and export found at {sum(both_positive)} interval(s)."
-    )
+    assert not any(
+        both_positive
+    ), f"Simultaneous import and export found at {sum(both_positive)} interval(s)."
 
 
 def test_ev_on_solar_customer_reduces_export_before_adding_import(solar_customer_df, day_30min):

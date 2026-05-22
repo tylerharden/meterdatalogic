@@ -31,9 +31,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
         cadence_min = utils.infer_cadence_minutes(g["t_start"])
 
         # Derive local date for each interval
-        g = g.with_columns(
-            pl.col("t_start").dt.convert_time_zone(tz).dt.date().alias("_date")
-        )
+        g = g.with_columns(pl.col("t_start").dt.convert_time_zone(tz).dt.date().alias("_date"))
 
         days: list[LogicalDay] = []
 
@@ -67,6 +65,7 @@ def to_logical(df: CanonFrame) -> LogicalCanon:
                 flows_dict[str(flow_name)] = merged["kwh"].to_list()
 
             import datetime as _dt
+
             date_py = _dt.date.fromisoformat(str(date_val))
             logical_day: LogicalDay = {
                 "date": _dt.datetime(date_py.year, date_py.month, date_py.day),
@@ -107,6 +106,7 @@ def from_logical(obj: LogicalCanon) -> CanonFrame:
 
             # Build tz-aware start-of-day
             import datetime as _dt
+
             if isinstance(date_val, _dt.datetime):
                 day_start = date_val.replace(tzinfo=None)
             elif isinstance(date_val, str):
@@ -114,9 +114,7 @@ def from_logical(obj: LogicalCanon) -> CanonFrame:
             else:
                 day_start = _dt.datetime(date_val.year, date_val.month, date_val.day)
 
-            ts_list = [
-                day_start + _dt.timedelta(minutes=cadence_min * i) for i in range(slots)
-            ]
+            ts_list = [day_start + _dt.timedelta(minutes=cadence_min * i) for i in range(slots)]
             ts_series = pl.Series(ts_list, dtype=pl.Datetime("us")).dt.replace_time_zone(tz)
 
             for flow_name, values in flows.items():

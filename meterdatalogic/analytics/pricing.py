@@ -11,6 +11,7 @@ from ..analytics.types import Plan
 
 def _tznorm(ts, tz):
     import datetime as _dt
+
     if isinstance(ts, str):
         ts = pl.Series([ts]).str.strptime(pl.Datetime("us"), "%Y-%m-%d").to_list()[0]
     if isinstance(ts, _dt.datetime):
@@ -35,8 +36,16 @@ def _label_cycles(
     labels: list[str] = []
 
     for s, e in cycles:
-        s_pl = pl.Series([str(s)]).str.strptime(pl.Date, "%Y-%m-%d").to_list()[0] if isinstance(s, str) else s
-        e_pl = pl.Series([str(e)]).str.strptime(pl.Date, "%Y-%m-%d").to_list()[0] if isinstance(e, str) else e
+        s_pl = (
+            pl.Series([str(s)]).str.strptime(pl.Date, "%Y-%m-%d").to_list()[0]
+            if isinstance(s, str)
+            else s
+        )
+        e_pl = (
+            pl.Series([str(e)]).str.strptime(pl.Date, "%Y-%m-%d").to_list()[0]
+            if isinstance(e, str)
+            else e
+        )
         # Convert date to tz-aware datetime at midnight
         s_dt = _dt.datetime(s_pl.year, s_pl.month, s_pl.day)
         e_dt = _dt.datetime(e_pl.year, e_pl.month, e_pl.day) + _dt.timedelta(days=1)
@@ -157,12 +166,15 @@ def _cycle_billables(
         out = out.join(total_import, on="cycle", how="left")
 
     # Fill numeric nulls
-    num_cols = [c for c in out.columns if out[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+    num_cols = [
+        c for c in out.columns if out[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+    ]
     out = out.with_columns([pl.col(c).fill_null(0.0) for c in num_cols])
 
     # ---- EXACT DAY COUNTS ----
     def _days_from_label(lbl: str) -> int:
         import datetime as _dt
+
         s_str, e_str = lbl.split("→")
         s = _dt.date.fromisoformat(s_str)
         e = _dt.date.fromisoformat(e_str)
@@ -215,14 +227,14 @@ def compute_billables(
                     interval="1mo",
                     eager=True,
                 )
-                base = pl.DataFrame(
-                    {"month": month_range.dt.strftime("%Y-%m")}
-                )
+                base = pl.DataFrame({"month": month_range.dt.strftime("%Y-%m")})
         if base.is_empty() and not tou.is_empty():
             base = tou.select("month").unique()
         if base.is_empty():
             cols = ["month", "export_kwh", "demand_kw"] + [b.name for b in plan.usage_bands]
-            return pl.DataFrame({c: pl.Series([], dtype=pl.String if c == "month" else pl.Float64) for c in cols})
+            return pl.DataFrame(
+                {c: pl.Series([], dtype=pl.String if c == "month" else pl.Float64) for c in cols}
+            )
 
         if tou.is_empty():
             tou = base.clone()
@@ -282,14 +294,18 @@ def compute_billables(
         if total_import is not None:
             out = out.join(total_import, on="month", how="left")
 
-        num_cols = [c for c in out.columns if out[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+        num_cols = [
+            c for c in out.columns if out[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+        ]
         return out.with_columns([pl.col(c).fill_null(0.0) for c in num_cols])
 
     # cycles mode
     if not cycles:
         raise ValueError("cycles must be provided when mode='cycles'")
     return _cycle_billables(
-        df, plan, cycles,
+        df,
+        plan,
+        cycles,
         include_controlled_load=include_controlled_load,
         include_total_import=include_total_import,
     )
@@ -328,12 +344,15 @@ def estimate_costs(
     # Fixed cost (days in period)
     if "cycle" in out.columns:
         if "days_in_cycle" not in out.columns:
+
             def _days_from_label(lbl: str) -> int:
                 import datetime as _dt
+
                 s_str, e_str = lbl.split("→")
                 s = _dt.date.fromisoformat(s_str)
                 e = _dt.date.fromisoformat(e_str)
                 return int((e - s).days) + 1
+
             days_list = [_days_from_label(str(lbl)) for lbl in out["cycle"].to_list()]
             out = out.with_columns(pl.Series(days_list, dtype=pl.Float64).alias("days_in_cycle"))
         days_expr = pl.col("days_in_cycle").cast(pl.Float64).fill_null(0.0)
@@ -350,9 +369,7 @@ def estimate_costs(
     else:
         raise ValueError("bill must contain 'month' or 'cycle' column")
 
-    out = out.with_columns(
-        (pl.lit(plan.fixed_c_per_day / 100.0) * days_expr).alias("fixed_cost")
-    )
+    out = out.with_columns((pl.lit(plan.fixed_c_per_day / 100.0) * days_expr).alias("fixed_cost"))
     if "_days_in_month" in out.columns:
         out = out.drop("_days_in_month")
 
@@ -360,7 +377,10 @@ def estimate_costs(
         if col not in out.columns:
             out = out.with_columns(pl.lit(0.0).alias(col))
     out = out.with_columns(
-        [pl.col(c).fill_null(0.0).cast(pl.Float64) for c in ("export_kwh", "energy_cost", "demand_cost", "fixed_cost")]
+        [
+            pl.col(c).fill_null(0.0).cast(pl.Float64)
+            for c in ("export_kwh", "energy_cost", "demand_cost", "fixed_cost")
+        ]
     )
 
     # Feed-in credit (negative)
@@ -369,7 +389,12 @@ def estimate_costs(
     )
 
     out = out.with_columns(
-        (pl.col("energy_cost") + pl.col("demand_cost") + pl.col("fixed_cost") + pl.col("feed_in_credit")).alias("subtotal")
+        (
+            pl.col("energy_cost")
+            + pl.col("demand_cost")
+            + pl.col("fixed_cost")
+            + pl.col("feed_in_credit")
+        ).alias("subtotal")
     )
 
     charges_only = (pl.col("energy_cost") + pl.col("demand_cost") + pl.col("fixed_cost")).round(2)
@@ -379,7 +404,12 @@ def estimate_costs(
 
     if include_gst:
         out = out.with_columns(
-            ((charges_only + pl.col("pay_on_time_discount")).clip(lower_bound=0.0) * float(gst_rate)).round(2).alias("gst")
+            (
+                (charges_only + pl.col("pay_on_time_discount")).clip(lower_bound=0.0)
+                * float(gst_rate)
+            )
+            .round(2)
+            .alias("gst")
         )
     else:
         out = out.with_columns(pl.lit(0.0).alias("gst"))
@@ -390,9 +420,26 @@ def estimate_costs(
 
     # Order columns
     if "month" in out.columns:
-        keep = ["month", "energy_cost", "demand_cost", "fixed_cost", "feed_in_credit",
-                "pay_on_time_discount", "gst", "total"]
+        keep = [
+            "month",
+            "energy_cost",
+            "demand_cost",
+            "fixed_cost",
+            "feed_in_credit",
+            "pay_on_time_discount",
+            "gst",
+            "total",
+        ]
     else:
-        keep = ["cycle", "days_in_cycle", "energy_cost", "demand_cost", "fixed_cost",
-                "feed_in_credit", "pay_on_time_discount", "gst", "total"]
+        keep = [
+            "cycle",
+            "days_in_cycle",
+            "energy_cost",
+            "demand_cost",
+            "fixed_cost",
+            "feed_in_credit",
+            "pay_on_time_discount",
+            "gst",
+            "total",
+        ]
     return out.select([c for c in keep if c in out.columns])

@@ -183,8 +183,16 @@ def run(
 
     interval_h = utils.interval_hours(df)
 
-    ev_arr = _apply_ev(all_ts, ev, interval_h) if ev else pl.Series([0.0] * len(all_ts), dtype=pl.Float64)
-    pv_arr = _apply_pv(all_ts, pv, interval_h) if pv else pl.Series([0.0] * len(all_ts), dtype=pl.Float64)
+    ev_arr = (
+        _apply_ev(all_ts, ev, interval_h)
+        if ev
+        else pl.Series([0.0] * len(all_ts), dtype=pl.Float64)
+    )
+    pv_arr = (
+        _apply_pv(all_ts, pv, interval_h)
+        if pv
+        else pl.Series([0.0] * len(all_ts), dtype=pl.Float64)
+    )
 
     net_before = import_arr - export_arr
     local_load_net = net_before + ev_arr - pv_arr
@@ -251,9 +259,7 @@ def run(
     if parts:
         df_after: CanonFrame = pl.concat(parts).sort("t_start")
         if tz and df_after["t_start"].dtype.time_zone != tz:
-            df_after = df_after.with_columns(
-                pl.col("t_start").dt.convert_time_zone(tz)
-            )
+            df_after = df_after.with_columns(pl.col("t_start").dt.convert_time_zone(tz))
     else:
         df_after = utils.empty_canon_frame(tz=tz or _DEFAULT_TZ)
 
