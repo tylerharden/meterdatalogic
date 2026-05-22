@@ -126,10 +126,9 @@ def peak_demand_characteristics(
 ) -> Optional[Insight]:
     if df.is_empty():
         return None
-    daily = transform.aggregate(
+    daily = transform.demand_window(
         df,
         freq="1D",
-        metric="kW",
         stat="max",
         window_start=config.intermediate.demand_window_start,
         window_end=config.intermediate.demand_window_end,

@@ -68,15 +68,7 @@ def summarise(
         monthly_bd["average"].to_dicts() if not monthly_bd["average"].is_empty() else []
     )
 
-    seasons_df = transform.aggregate(
-        df,
-        freq="1MS",
-        groupby=["season", "flow"],
-        hemisphere=hemisphere,
-        pivot=False,
-        value_col="kwh",
-        agg="sum",
-    )
+    seasons_df = transform.seasonal_totals(df, hemisphere=hemisphere)
     if not seasons_df.is_empty() and "flow" in seasons_df.columns:
         seasons_df = seasons_df.pivot(
             index=["season", "year"], on="flow", values="kwh", aggregate_function="sum"

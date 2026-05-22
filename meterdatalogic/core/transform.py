@@ -1,3 +1,18 @@
+"""Time-series transformations on CanonFrame meter data.
+
+All public functions in this module take a CanonFrame as their primary input and
+return a polars DataFrame. They do not mutate the input.
+
+Functions:
+    filter_time_window  — filter rows to a time-of-day / day-of-week window
+    aggregate           — resample kWh values over time buckets
+    demand_window       — convert kWh → kW and aggregate per period
+    seasonal_totals     — aggregate kWh grouped by season, year, and flow
+    tou_bins            — aggregate kWh into named time-of-use bands
+    profile             — build an average-day slot profile
+    period_breakdown    — per-day or per-month totals, peaks, and averages
+"""
+
 from __future__ import annotations
 import polars as pl
 from typing import Literal, Iterable, Optional, Sequence
@@ -40,21 +55,6 @@ def _to_polars_freq(freq: str) -> str:
     return _FREQ_MAP.get(freq, freq)
 
 
-def _filter_range(
-    df: CanonFrame,
-    start: Optional[object] = None,
-    end: Optional[object] = None,
-) -> CanonFrame:
-    conditions = []
-    if start is not None:
-        conditions.append(pl.col("t_start") >= start)
-    if end is not None:
-        conditions.append(pl.col("t_start") <= end)
-    if conditions:
-        return df.filter(pl.all_horizontal(conditions))
-    return df
-
-
 def _time_window_mask(
     t_start: pl.Series,
     *,
@@ -68,6 +68,19 @@ def _time_window_mask(
     end_t = utils.parse_time_str(end)
     timemask = utils.time_in_range(t_start, start_t, end_t)
     return daymask & timemask
+
+
+def filter_time_window(
+    df: CanonFrame,
+    *,
+    start: str,
+    end: str,
+    days: Literal["ALL", "MF", "MS"] = "ALL",
+) -> CanonFrame:
+    """Filter rows to those within the given time-of-day (and optionally day-of-week) window."""
+    if "t_start" not in df.columns:
+        raise TypeError("filter_time_window requires a 't_start' column.")
+    return df.filter(_time_window_mask(df["t_start"], start=start, end=end, days=days))
 
 
 def _assign_time_bands(t_start: pl.Series, bands: Iterable[dict]) -> pl.Series:
@@ -89,6 +102,54 @@ def _compute_power_from_energy(df: pl.DataFrame, *, energy_col: str = "kwh") -> 
     return (df[energy_col].cast(pl.Float64) * factor).rename("kW")
 
 
+def _agg_expr(col: str, how: str) -> pl.Expr:
+    """Return a polars aggregation expression for the given strategy."""
+    if how == "max":
+        return pl.col(col).max()
+    if how == "mean":
+        return pl.col(col).mean()
+    return pl.col(col).sum()
+
+
+def _resample_val(
+    s: pl.DataFrame,
+    *,
+    freq: str | None,
+    grp_cols: list[str],
+    stat: str,
+    out_col: str,
+    closed: Literal["left", "right"] = "left",
+) -> pl.DataFrame:
+    """Resample a pre-computed '_val' column by freq + optional group columns.
+
+    Handles three paths: no-resample (freq=None), grouped resample, plain resample.
+    Does not support pivot — callers handle that themselves.
+    """
+    if freq is None:
+        if grp_cols:
+            return s.group_by(grp_cols).agg(_agg_expr("_val", stat).alias(out_col))
+        agg_val = float(
+            s["_val"].max()
+            if stat == "max"
+            else (s["_val"].mean() if stat == "mean" else s["_val"].sum())
+        )
+        return pl.DataFrame({out_col: [agg_val]})
+    every = _to_polars_freq(freq)
+    if grp_cols:
+        return (
+            s.sort("t_start")
+            .group_by_dynamic("t_start", every=every, group_by=grp_cols, closed=closed)
+            .agg(_agg_expr("_val", stat).alias(out_col))
+            .sort("t_start")
+        )
+    return (
+        s.sort("t_start")
+        .group_by_dynamic("t_start", every=every, closed=closed)
+        .agg(_agg_expr("_val", stat).alias(out_col))
+        .sort("t_start")
+    )
+
+
 def aggregate(
     df: CanonFrame,
     *,
@@ -98,20 +159,13 @@ def aggregate(
     groupby: str | Sequence[str] | None = None,
     pivot: bool = False,
     flows: Iterable[str] | None = None,
-    window_start: str | None = None,
-    window_end: str | None = None,
-    window_days: Literal["ALL", "MF", "MS"] = "ALL",
-    metric: Literal["kWh", "kW"] = "kWh",
-    stat: Literal["max", "mean", "sum"] = "max",
-    out_col: Optional[str] = None,
-    label: Literal["left", "right"] = "left",
     closed: Literal["left", "right"] = "left",
-    hemisphere: Literal["northern", "southern"] | None = None,
 ) -> pl.DataFrame:
     """
-    Unified aggregation helper. Filters by flow, applies an optional time window,
-    then resamples or groups. metric='kW' converts kWh to power. groupby='season'
-    with hemisphere produces seasonal splits.
+    Resample or group kWh values over time periods.
+
+    For kW demand calculations use demand_window() instead.
+    For seasonal grouping use seasonal_totals() instead.
     """
     if "t_start" not in df.columns:
         raise TypeError("aggregate requires a 't_start' column.")
@@ -120,129 +174,137 @@ def aggregate(
     if flows:
         s = s.filter(pl.col("flow").is_in(list(flows)))
     if s.is_empty():
-        base_name = out_col or ("demand_kw" if metric == "kW" else value_col)
         if pivot and groupby:
             return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us"))})
-        return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), base_name: []})
+        return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), value_col: []})
 
-    # Optional time window filter
-    if window_start is not None and window_end is not None:
-        mask = _time_window_mask(s["t_start"], start=window_start, end=window_end, days=window_days)
-        s = s.filter(mask)
-        if s.is_empty():
-            base_name = out_col or ("demand_kw" if metric == "kW" else value_col)
-            if pivot and groupby:
-                return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us"))})
-            return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), base_name: []})
-
-    if metric == "kW":
-        val_series = _compute_power_from_energy(s, energy_col=value_col)
-        base_name = out_col or "demand_kw"
-        effective_stat = stat
-    else:
-        val_series = s[value_col].cast(pl.Float64)
-        base_name = out_col or value_col
-        effective_stat = agg
-
-    s = s.with_columns(val_series.alias("_val"))
+    s = s.with_columns(s[value_col].cast(pl.Float64).alias("_val"))
 
     grp_cols: list[str] = []
     if groupby is not None:
         grp_cols = [groupby] if isinstance(groupby, str) else list(groupby)
 
-    # Seasonal columns
-    if "season" in grp_cols:
-        if hemisphere is None:
-            raise ValueError("hemisphere parameter required when groupby includes 'season'")
-        season_months = SEASON_DEFINITIONS[hemisphere]
-        month_to_season = {
-            m: name for name, months_list in season_months.items() for m in months_list
-        }
-        months = s["t_start"].dt.month()
-        years = s["t_start"].dt.year()
-        s = s.with_columns(
-            [
-                months.map_elements(
-                    lambda m: month_to_season.get(m, "Unknown"), return_dtype=pl.String
-                ).alias("_season"),
-                (years + (months == 12).cast(pl.Int32)).alias("_season_year"),
-            ]
-        )
-        grp_cols = ["_season" if c == "season" else c for c in grp_cols]
-        if "_season_year" not in grp_cols:
-            grp_cols.insert(grp_cols.index("_season") + 1, "_season_year")
-
-    def _agg_expr(col: str, how: str) -> pl.Expr:
-        if how == "max":
-            return pl.col(col).max()
-        if how == "mean":
-            return pl.col(col).mean()
-        return pl.col(col).sum()
-
-    if freq is None:
-        # Aggregate without resampling
-        if grp_cols:
-            out = s.group_by(grp_cols).agg(_agg_expr("_val", effective_stat).alias(base_name))
-        else:
-            agg_val = float(
-                s["_val"].max()
-                if effective_stat == "max"
-                else (s["_val"].mean() if effective_stat == "mean" else s["_val"].sum())
-            )
-            out = pl.DataFrame({base_name: [agg_val]})
-
-    elif grp_cols:
-        # Resample with grouping
+    if pivot and grp_cols and freq is not None:
         every = _to_polars_freq(freq)
         res = (
             s.sort("t_start")
             .group_by_dynamic("t_start", every=every, group_by=grp_cols, closed=closed)
-            .agg(_agg_expr("_val", effective_stat).alias(base_name))
+            .agg(_agg_expr("_val", agg).alias(value_col))
         )
-        if pivot:
-            # Only single-column groupby supported for pivot
-            pivot_col = grp_cols[0]
-            out = (
-                res.pivot(index="t_start", on=pivot_col, values=base_name, aggregate_function="sum")
-                .fill_null(0.0)
-                .sort("t_start")
-            )
-        else:
-            out = res.sort("t_start")
-
-    else:
-        # Pure resample, no extra grouping
-        every = _to_polars_freq(freq)
-        out = (
-            s.sort("t_start")
-            .group_by_dynamic("t_start", every=every, closed=closed)
-            .agg(_agg_expr("_val", effective_stat).alias(base_name))
+        return (
+            res.pivot(index="t_start", on=grp_cols[0], values=value_col, aggregate_function="sum")
+            .fill_null(0.0)
             .sort("t_start")
         )
 
-    # Rename _season/_season_year back to season/year
+    return _resample_val(
+        s, freq=freq, grp_cols=grp_cols, stat=agg, out_col=value_col, closed=closed
+    )
+
+
+def demand_window(
+    df: CanonFrame,
+    *,
+    freq: str | None,
+    window_start: str | None = None,
+    window_end: str | None = None,
+    window_days: Literal["ALL", "MF", "MS"] = "ALL",
+    stat: Literal["max", "mean", "sum"] = "max",
+    flows: Iterable[str] | None = None,
+    groupby: str | Sequence[str] | None = None,
+    out_col: str = "demand_kw",
+    closed: Literal["left", "right"] = "left",
+) -> pl.DataFrame:
+    """
+    Convert interval kWh to kW and aggregate per period, with an optional time-window pre-filter.
+
+    Returns a DataFrame with t_start and <out_col> columns (or groupby cols when freq=None).
+    Typical use: monthly peak demand over a pricing window (e.g. 16:00\u201321:00 Mon\u2013Fri).
+    """
+    if "t_start" not in df.columns:
+        raise TypeError("demand_window requires a 't_start' column.")
+
+    s = df
+    if flows:
+        s = s.filter(pl.col("flow").is_in(list(flows)))
+    if s.is_empty():
+        return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), out_col: []})
+
+    if window_start is not None and window_end is not None:
+        mask = _time_window_mask(s["t_start"], start=window_start, end=window_end, days=window_days)
+        s = s.filter(mask)
+        if s.is_empty():
+            return pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), out_col: []})
+
+    s = s.with_columns(_compute_power_from_energy(s).alias("_val"))
+
+    grp_cols: list[str] = []
     if groupby is not None:
-        grp_list = [groupby] if isinstance(groupby, str) else list(groupby)
-        if "season" in grp_list:
-            rename_map = {"_season": "season", "_season_year": "year"}
-            rename_present = {k: v for k, v in rename_map.items() if k in out.columns}
-            if rename_present:
-                out = out.rename(rename_present)
+        grp_cols = [groupby] if isinstance(groupby, str) else list(groupby)
 
-            if hemisphere and "season" in out.columns and "year" in out.columns:
-                season_months_def = SEASON_DEFINITIONS[hemisphere]
-                season_order = {name: i for i, name in enumerate(season_months_def)}
-                out = (
-                    out.with_columns(
-                        pl.col("season")
-                        .map_elements(lambda s: season_order.get(s, 99), return_dtype=pl.Int32)
-                        .alias("_order")
-                    )
-                    .sort(["year", "_order"])
-                    .drop("_order")
-                )
+    return _resample_val(s, freq=freq, grp_cols=grp_cols, stat=stat, out_col=out_col, closed=closed)
 
-    return out
+
+def seasonal_totals(
+    df: CanonFrame,
+    *,
+    hemisphere: Literal["northern", "southern"],
+    flows: Iterable[str] | None = None,
+    value_col: str = "kwh",
+    agg: str = "sum",
+) -> pl.DataFrame:
+    """
+    Aggregate kWh totals grouped by season, year, and flow.
+
+    Returns long-format (season, year, flow, <value_col>) sorted in calendar season order.
+    December is assigned to the following year's season (e.g. Dec 2024 → Summer 2025).
+    """
+    if "t_start" not in df.columns:
+        raise TypeError("seasonal_totals requires a 't_start' column.")
+
+    s = df
+    if flows:
+        s = s.filter(pl.col("flow").is_in(list(flows)))
+    if s.is_empty():
+        cols: dict = {
+            "season": pl.Series([], dtype=pl.String),
+            "year": pl.Series([], dtype=pl.Int32),
+        }
+        if "flow" in df.columns:
+            cols["flow"] = pl.Series([], dtype=pl.String)
+        cols[value_col] = pl.Series([], dtype=pl.Float64)
+        return pl.DataFrame(cols)
+
+    season_months = SEASON_DEFINITIONS[hemisphere]
+    month_to_season = {m: name for name, months_list in season_months.items() for m in months_list}
+    months = s["t_start"].dt.month()
+    years = s["t_start"].dt.year()
+    s = s.with_columns(
+        [
+            s[value_col].cast(pl.Float64).alias(value_col),
+            months.map_elements(
+                lambda m: month_to_season.get(m, "Unknown"), return_dtype=pl.String
+            ).alias("season"),
+            (years + (months == 12).cast(pl.Int32)).alias("year"),
+        ]
+    )
+
+    grp_cols = ["season", "year"]
+    if "flow" in s.columns:
+        grp_cols = ["season", "year", "flow"]
+
+    out = s.group_by(grp_cols).agg(_agg_expr(value_col, agg).alias(value_col))
+
+    season_order = {name: i for i, name in enumerate(season_months)}
+    return (
+        out.with_columns(
+            pl.col("season")
+            .map_elements(lambda x: season_order.get(x, 99), return_dtype=pl.Int32)
+            .alias("_order")
+        )
+        .sort(["year", "_order"])
+        .drop("_order")
+    )
 
 
 def tou_bins(
@@ -439,7 +501,7 @@ def period_breakdown(
     else:
         peaks = pl.DataFrame({labels: pl.Series([], dtype=pl.String), "peak_interval_kwh": []})
 
-    avg_df = aggregate(df, freq=freq, metric="kW", stat="mean", flows=flows)
+    avg_df = demand_window(df, freq=freq, stat="mean", flows=flows)
     if "t_start" in avg_df.columns:
         avg_df = avg_df.rename({"t_start": labels, "demand_kw": "mean_kw"}).with_columns(
             pl.col(labels).dt.strftime(label_fmt).alias(labels)

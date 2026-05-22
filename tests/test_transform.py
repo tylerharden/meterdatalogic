@@ -25,24 +25,20 @@ def _mk_df(ts: pl.Series, kwh=1.0, flow="grid_import") -> pl.DataFrame:
 
 def test_window_aggregate_all_vs_mf(halfhour_rng):
     df = _mk_df(halfhour_rng)
-    all_days = transform.aggregate(
+    all_days = transform.demand_window(
         df,
         freq="1MS",
         flows=["grid_import"],
-        metric="kW",
         stat="max",
-        out_col="demand_kw",
         window_start="16:00",
         window_end="20:00",
         window_days="ALL",
     )
-    mf_days = transform.aggregate(
+    mf_days = transform.demand_window(
         df,
         freq="1MS",
         flows=["grid_import"],
-        metric="kW",
         stat="max",
-        out_col="demand_kw",
         window_start="16:00",
         window_end="20:00",
         window_days="MF",
@@ -53,13 +49,11 @@ def test_window_aggregate_all_vs_mf(halfhour_rng):
 
 def test_window_aggregate_wrap_midnight(halfhour_rng):
     df = _mk_df(halfhour_rng)
-    wrap = transform.aggregate(
+    wrap = transform.demand_window(
         df,
         freq="1MS",
         flows=["grid_import"],
-        metric="kW",
         stat="max",
-        out_col="demand_kw",
         window_start="22:00",
         window_end="03:00",
         window_days="ALL",
@@ -84,13 +78,11 @@ def test_groupby_month(canon_df_one_nmi):
 
 def test_window_aggregate_basic(canon_df_one_nmi):
     df = ingest.from_dataframe(canon_df_one_nmi)
-    demand = transform.aggregate(
+    demand = transform.demand_window(
         df,
         freq="1MS",
         flows=["grid_import"],
-        metric="kW",
         stat="max",
-        out_col="demand_kw",
         window_start="16:00",
         window_end="21:00",
         window_days="MF",

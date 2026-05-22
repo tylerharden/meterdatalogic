@@ -185,13 +185,12 @@ def step_change_baseload(
     if days_total < config.advanced.min_days_for_step_check:
         return None
 
-    daily_df = transform.aggregate(
+    overnight = transform.filter_time_window(
         df,
-        freq="1D",
-        agg="sum",
-        window_start=config.advanced.overnight_start,
-        window_end=config.advanced.overnight_end,
+        start=config.advanced.overnight_start,
+        end=config.advanced.overnight_end,
     )
+    daily_df = transform.aggregate(overnight, freq="1D", agg="sum")
     col = (
         "kwh"
         if "kwh" in daily_df.columns

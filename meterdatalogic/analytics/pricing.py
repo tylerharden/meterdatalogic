@@ -126,13 +126,11 @@ def _cycle_billables(
     # ---- DEMAND ----
     if plan.demand:
         imp_cf = dfx.filter(pl.col("flow") == "grid_import")
-        demand = transform.aggregate(
+        demand = transform.demand_window(
             imp_cf,
             freq=None,
             groupby=["cycle"],
-            metric="kW",
             stat="max",
-            out_col="demand_kw",
             window_start=plan.demand.window_start,
             window_end=plan.demand.window_end,
             window_days=plan.demand.days,
@@ -243,13 +241,11 @@ def compute_billables(
 
         # Demand
         if plan.demand:
-            demand = transform.aggregate(
+            demand = transform.demand_window(
                 df,
                 freq="1MS",
                 flows=["grid_import"],
-                metric="kW",
                 stat="max",
-                out_col="demand_kw",
                 window_start=plan.demand.window_start,
                 window_end=plan.demand.window_end,
                 window_days=plan.demand.days,  # type: ignore[arg-type]
