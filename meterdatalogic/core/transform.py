@@ -260,11 +260,160 @@ def profile(
         float_cols = [
             c for c in cols if prof[c].dtype in (pl.Float64, pl.Float32, pl.Int32, pl.Int64)
         ]
-        prof = prof.with_columns(
-            pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("import_total")
-        )
+        if float_cols:
+            prof = prof.with_columns(
+                pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias(
+                    "import_total"
+                )
+            )
+        else:
+            prof = prof.with_columns(pl.lit(0.0).alias("import_total"))
 
     return prof
+
+
+def seasonal_profiles(
+    df: CanonFrame,
+    *,
+    hemisphere: Literal["northern", "southern"],
+    slot_fmt: str = "%H:%M",
+    include_import_total: bool = True,
+    import_flows: Iterable[str] | None = None,
+) -> pl.DataFrame:
+    """Build average 24-hour profiles grouped by season and slot."""
+    if df.is_empty():
+        return pl.DataFrame(
+            {
+                "season": pl.Series([], dtype=pl.String),
+                "slot": pl.Series([], dtype=pl.String),
+            }
+        )
+
+    season_months = SEASON_DEFINITIONS[hemisphere]
+    month_to_season = {m: name for name, months_list in season_months.items() for m in months_list}
+    s = df.with_columns(
+        pl.col("t_start").dt.strftime(slot_fmt).alias("slot"),
+        pl.col("t_start")
+        .dt.month()
+        .map_elements(lambda m: month_to_season.get(m, "Unknown"), return_dtype=pl.String)
+        .alias("season"),
+    )
+
+    grouped = s.group_by(["season", "slot", "flow"]).agg(pl.col("kwh").mean())
+    prof = (
+        grouped.pivot(index=["season", "slot"], on="flow", values="kwh", aggregate_function="first")
+        .fill_null(0.0)
+        .sort(["season", "slot"])
+    )
+
+    if include_import_total:
+        flow_cols = [c for c in prof.columns if c not in ("season", "slot")]
+        if import_flows:
+            cols = [c for c in flow_cols if c in set(import_flows)]
+        else:
+            cols = [c for c in flow_cols if "import" in str(c)]
+            if not cols:
+                cols = flow_cols
+        float_cols = [
+            c for c in cols if prof[c].dtype in (pl.Float64, pl.Float32, pl.Int32, pl.Int64)
+        ]
+        if float_cols:
+            prof = prof.with_columns(
+                pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias(
+                    "import_total"
+                )
+            )
+        else:
+            prof = prof.with_columns(pl.lit(0.0).alias("import_total"))
+
+    return prof
+
+
+def resample_intervals(
+    df: CanonFrame,
+    *,
+    interval_min: int,
+    value_col: str = "kwh",
+    groupby: Iterable[str] | None = ("nmi", "channel", "flow"),
+) -> pl.DataFrame:
+    """Aggregate interval meter data into coarser fixed-minute buckets.
+
+    Energy values are summed within each target bucket. Existing grouping columns
+    such as NMI, channel, and flow are preserved when present, making this useful
+    anywhere the package needs lower-resolution interval data for summaries,
+    reports, charts, or further transforms.
+    """
+    if interval_min <= 0:
+        raise ValueError("interval_min must be greater than zero")
+    if "t_start" not in df.columns:
+        raise TypeError("resample_intervals requires a 't_start' column.")
+    if value_col not in df.columns:
+        raise TypeError(f"resample_intervals requires a {value_col!r} column.")
+    if df.is_empty():
+        return df
+
+    every = f"{interval_min}m"
+    group_cols = [col for col in (groupby or []) if col in df.columns]
+    bucket_col = "_bucket_start"
+    out = (
+        df.with_columns(pl.col("t_start").dt.truncate(every).alias(bucket_col))
+        .group_by([bucket_col, *group_cols])
+        .agg(pl.col(value_col).sum().alias(value_col))
+        .rename({bucket_col: "t_start"})
+        .sort(["t_start", *group_cols])
+    )
+    if "cadence_min" in df.columns:
+        out = out.with_columns(pl.lit(interval_min).cast(pl.Int32).alias("cadence_min"))
+    return out
+
+
+def daily_interval_profile(
+    df: CanonFrame,
+    *,
+    interval_min: int = 30,
+) -> pl.DataFrame:
+    """Return per-date, per-slot import/export/net kW profile.
+
+    Values are normalised to configurable interval buckets so high-cadence source
+    data remains practical for downstream reports, charts, and browser UIs.
+    """
+    if df.is_empty():
+        return pl.DataFrame(
+            {
+                "date": pl.Series([], dtype=pl.String),
+                "slot": pl.Series([], dtype=pl.String),
+                "import_kw": pl.Series([], dtype=pl.Float64),
+                "export_kw": pl.Series([], dtype=pl.Float64),
+                "net_kw": pl.Series([], dtype=pl.Float64),
+            }
+        )
+
+    scale = 60.0 / interval_min if interval_min else 0.0
+    resampled = resample_intervals(df, interval_min=interval_min)
+    return (
+        resampled.with_columns(
+            pl.when(pl.col("flow").str.contains("import"))
+            .then(pl.col("kwh"))
+            .otherwise(0.0)
+            .alias("_import_kwh"),
+            pl.when(pl.col("flow").str.contains("export"))
+            .then(pl.col("kwh"))
+            .otherwise(0.0)
+            .alias("_export_kwh"),
+        )
+        .group_by("t_start")
+        .agg(
+            pl.col("_import_kwh").sum().mul(scale).alias("import_kw"),
+            pl.col("_export_kwh").sum().mul(scale).alias("export_kw"),
+        )
+        .with_columns(
+            pl.col("t_start").dt.strftime("%Y-%m-%d").alias("date"),
+            pl.col("t_start").dt.strftime("%H:%M").alias("slot"),
+            (pl.col("import_kw") - pl.col("export_kw")).alias("net_kw"),
+        )
+        .select(["date", "slot", "import_kw", "export_kw", "net_kw"])
+        .sort(["date", "slot"])
+    )
 
 
 def window_stats_from_profile(
@@ -346,9 +495,12 @@ def period_breakdown(
         float_cols = [
             c for c in flow_cols if totals[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
         ]
-        totals = totals.with_columns(
-            pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("total_kwh")
-        )
+        if float_cols:
+            totals = totals.with_columns(
+                pl.sum_horizontal([pl.col(c).fill_null(0.0) for c in float_cols]).alias("total_kwh")
+            )
+        else:
+            totals = totals.with_columns(pl.lit(0.0).alias("total_kwh"))
     else:
         totals = pl.DataFrame({labels: pl.Series([], dtype=pl.String)})
 
@@ -356,18 +508,34 @@ def period_breakdown(
         (
             _sf.sort("t_start")
             .group_by_dynamic("t_start", every=every)
-            .agg(pl.col("kwh").max())
+            .agg(
+                pl.col("kwh").max(),
+                pl.col("t_start").sort_by("kwh").last().alias("peak_interval_time"),
+            )
             .sort("t_start")
         )
         if not _sf.is_empty()
-        else pl.DataFrame({"t_start": pl.Series([], dtype=pl.Datetime("us")), "kwh": []})
+        else pl.DataFrame(
+            {
+                "t_start": pl.Series([], dtype=pl.Datetime("us")),
+                "kwh": [],
+                "peak_interval_time": [],
+            }
+        )
     )
     if "t_start" in peaks.columns:
         peaks = peaks.rename({"t_start": labels, "kwh": "peak_interval_kwh"}).with_columns(
-            pl.col(labels).dt.strftime(label_fmt).alias(labels)
+            pl.col(labels).dt.strftime(label_fmt).alias(labels),
+            pl.col("peak_interval_time").cast(pl.String),
         )
     else:
-        peaks = pl.DataFrame({labels: pl.Series([], dtype=pl.String), "peak_interval_kwh": []})
+        peaks = pl.DataFrame(
+            {
+                labels: pl.Series([], dtype=pl.String),
+                "peak_interval_kwh": [],
+                "peak_interval_time": [],
+            }
+        )
 
     avg_df = demand_window(df, freq=freq, stat="mean", flows=flows)
     if "t_start" in avg_df.columns:

@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 -
 
+## [0.6.0] - 2026-07-14
+
+### Added
+- `transform.resample_intervals()` for reusable fixed-minute interval downsampling.
+- `transform.daily_interval_profile()` for per-date, per-slot import/export/net kW profiles.
+- `summary.summarise()` now includes `datasets.demand_heatmap_logical` for compact heatmap rendering.
+- `summary.summarise()` now includes `datasets.seasonal_profiles` for seasonal average-day profiles.
+
+### Changed
+- Monthly period breakdown peak rows now include `peak_interval_time`.
+
 ## [0.5.0] - 2026-05-20
 
 ### Changed

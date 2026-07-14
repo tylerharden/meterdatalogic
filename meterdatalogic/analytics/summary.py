@@ -8,7 +8,7 @@ import polars as pl
 from .. import config
 from ..core import transform, utils, canon
 from ..core.types import CanonFrame
-from .types import SummaryPayload, SummaryPeaks
+from .types import SeriesBreakdown, SummaryPayload, SummaryPeaks
 from . import insights as insights_mod
 
 
@@ -64,11 +64,84 @@ def _joined_breakdown(bd: dict[str, pl.DataFrame], label_col: str) -> pl.DataFra
     return result
 
 
+def _interval_profile_to_logical(profile: pl.DataFrame) -> dict:
+    """Pack date/slot interval profile rows into a compact logical grid."""
+    if profile.is_empty():
+        return {
+            "dates": [],
+            "slots": [],
+            "import_kw": [],
+            "export_kw": [],
+            "net_kw": [],
+        }
+
+    dates = sorted(str(value) for value in profile["date"].unique().to_list())
+    slots = sorted(str(value) for value in profile["slot"].unique().to_list())
+    date_idx = {date: index for index, date in enumerate(dates)}
+    slot_idx = {slot: index for index, slot in enumerate(slots)}
+    import_kw = [[0.0 for _ in slots] for _ in dates]
+    export_kw = [[0.0 for _ in slots] for _ in dates]
+    net_kw = [[0.0 for _ in slots] for _ in dates]
+
+    for row in profile.to_dicts():
+        d = date_idx[str(row["date"])]
+        s = slot_idx[str(row["slot"])]
+        import_kw[d][s] = float(row.get("import_kw") or 0.0)
+        export_kw[d][s] = float(row.get("export_kw") or 0.0)
+        net_kw[d][s] = float(row.get("net_kw") or 0.0)
+
+    return {
+        "dates": dates,
+        "slots": slots,
+        "import_kw": import_kw,
+        "export_kw": export_kw,
+        "net_kw": net_kw,
+    }
+
+
 def summarise(
-    df: CanonFrame, hemisphere: Literal["northern", "southern"] | None = None
+    df: CanonFrame,
+    hemisphere: Literal["northern", "southern"] | None = None,
 ) -> SummaryPayload:
     if hemisphere is None:
         hemisphere = config.DEFAULT_HEMISPHERE
+
+    if df.is_empty():
+        empty_bd: SeriesBreakdown = {"total": [], "peaks": [], "average": []}
+        return {
+            "meta": {
+                "nmis": 0,
+                "start": "",
+                "end": "",
+                "cadence_min": 30,
+                "days": 0,
+                "channels": [],
+                "flows": [],
+            },
+            "stats": {
+                "total_import_kwh": 0.0,
+                "solar_export_kwh": 0.0,
+                "per_day_avg_kwh": 0.0,
+                "peaks": {"max_interval_kwh": 0.0, "max_interval_time": None},
+                "windows": {},
+                "base": {"base_kw": 0.0, "base_kwh_per_day": 0.0, "share_of_daily_pct": 0.0},
+                "top_hours": {"hours": [], "kwh_total": 0.0, "share_of_daily_pct": 0.0},
+            },
+            "datasets": {
+                "profile24": [],
+                "seasonal_profiles": [],
+                "days": empty_bd,
+                "months": empty_bd,
+                "seasons": [],
+                "demand_heatmap_logical": {
+                    "dates": [],
+                    "slots": [],
+                    "import_kw": [],
+                    "export_kw": [],
+                    "net_kw": [],
+                },
+            },
+        }
 
     ts_col = df["t_start"]
     start = ts_col.min()
@@ -96,6 +169,9 @@ def summarise(
     }
 
     prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
+    seasonal_prof = transform.seasonal_profiles(
+        df, hemisphere=hemisphere, include_import_total=True
+    )
 
     daily_bd = transform.period_breakdown(df, freq="1d", cadence_min=cadence, labels="day")
     monthly_bd = transform.period_breakdown(df, freq="1mo", cadence_min=cadence, labels="month")
@@ -148,6 +224,7 @@ def summarise(
         },
         "datasets": {
             "profile24": _to_records(prof),
+            "seasonal_profiles": _to_records(seasonal_prof),
             "days": {
                 "total": _to_records(_joined_breakdown(daily_bd, "day")),
                 "peaks": _to_records(daily_bd["peaks"]),
@@ -159,6 +236,9 @@ def summarise(
                 "average": _to_records(monthly_bd["average"]),
             },
             "seasons": _to_records(seasons_df),
+            "demand_heatmap_logical": _interval_profile_to_logical(
+                transform.daily_interval_profile(df)
+            ),
         },
     }
 

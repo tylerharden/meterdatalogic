@@ -229,5 +229,74 @@ def test_datasets_keys_present(canon_df_one_nmi):
     datasets = ml.summary.summarise(df)["datasets"]
     assert "profile24" in datasets
     assert "days" in datasets and "months" in datasets and "seasons" in datasets
+    assert "seasonal_profiles" in datasets
+    assert "demand_heatmap_logical" in datasets
     assert {"total", "peaks", "average"} == set(datasets["days"].keys())
     assert {"total", "peaks", "average"} == set(datasets["months"].keys())
+
+
+def test_demand_heatmap_contains_date_slot_and_kw(canon_df_one_nmi):
+    df = ml.ingest.from_dataframe(canon_df_one_nmi)
+    heatmap = ml.summary.summarise(df)["datasets"]["demand_heatmap_logical"]
+    assert len(heatmap["dates"]) == 7
+    assert len(heatmap["slots"]) == 48
+    assert heatmap["slots"][:2] == ["00:00", "00:30"]
+    assert heatmap["import_kw"][0][0] == pytest.approx(1.0)
+    assert heatmap["export_kw"][0][0] == pytest.approx(0.0)
+    assert heatmap["net_kw"][0][0] == pytest.approx(1.0)
+
+
+def test_demand_heatmap_defaults_to_30_minute_buckets():
+    ts = _ts_range("2025-01-01T00:00:00", 24 * 12, 5)
+    df = _import_df(ts, kwh=0.1).with_columns(pl.lit(5).cast(pl.Int32).alias("cadence_min"))
+    heatmap = ml.summary.summarise(df)["datasets"]["demand_heatmap_logical"]
+    assert len(heatmap["dates"]) == 1
+    assert len(heatmap["slots"]) == 48
+    assert heatmap["slots"][0] == "00:00"
+    assert heatmap["slots"][1] == "00:30"
+    assert heatmap["import_kw"][0][0] == pytest.approx(1.2)
+
+
+def test_seasonal_profiles_contains_season_slot_and_import_total(canon_df_one_nmi):
+    df = ml.ingest.from_dataframe(canon_df_one_nmi)
+    seasonal_profiles = ml.summary.summarise(df)["datasets"]["seasonal_profiles"]
+    assert len(seasonal_profiles) == 48
+    assert {"season", "slot", "import_total"}.issubset(seasonal_profiles[0])
+    assert seasonal_profiles[0]["season"] == "Summer"
+
+
+def test_monthly_breakdown_peak_includes_timestamp(canon_df_one_nmi):
+    df = ml.ingest.from_dataframe(canon_df_one_nmi)
+    months = ml.summary.summarise(df)["datasets"]["months"]["total"]
+    assert "peak_interval_time" in months[0]
+    assert months[0]["peak_interval_time"]
+
+
+# ------------------------------------------------------------------
+# Edge cases
+# ------------------------------------------------------------------
+
+
+def test_summarise_single_day_does_not_raise():
+    """Minimal input: one day of data at the boundary of useful inputs."""
+    ts = _ts_range("2025-01-01T00:00:00", 48, 30)
+    df = _import_df(ts)
+    payload = ml.summary.summarise(df)
+    assert "meta" in payload
+    assert payload["meta"]["days"] == 1
+    assert payload["stats"]["total_import_kwh"] == pytest.approx(48 * 0.5)
+
+
+def test_summarise_empty_frame_does_not_raise():
+    """Empty canon frame should not raise (graceful no-data path)."""
+    from meterdatalogic import canon as _canon
+
+    df = _canon.empty_canon_frame()
+    payload = ml.summary.summarise(df)
+    assert "meta" in payload and "stats" in payload and "datasets" in payload
+
+
+def test_summarise_northern_hemisphere(canon_df_one_nmi):
+    df = ml.ingest.from_dataframe(canon_df_one_nmi)
+    payload = ml.summary.summarise(df, hemisphere="northern")
+    assert "meta" in payload and "stats" in payload and "datasets" in payload

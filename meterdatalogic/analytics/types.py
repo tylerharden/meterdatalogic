@@ -67,9 +67,11 @@ class SeriesBreakdown(TypedDict, total=False):
 
 class SummaryDatasets(TypedDict, total=False):
     profile24: List[Dict[str, float | str]]
+    seasonal_profiles: List[Dict[str, float | str]]
     days: SeriesBreakdown
     months: SeriesBreakdown
     seasons: List[Dict[str, float | str]]
+    demand_heatmap_logical: Dict[str, List]
 
 
 ###
