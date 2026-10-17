@@ -229,6 +229,53 @@ def test_run_wires_components_and_prices(day_30min, monkeypatch):
     assert called["pricing"] is True
 
 
+def test_run_forwards_discount_and_gst_to_both_cost_calls(day_30min, monkeypatch):
+    """pay_on_time_discount/include_gst/gst_rate passed to run() must reach
+    every internal pricing.estimate_costs() call (before AND after), so
+    callers don't need to re-derive discount/GST/total themselves."""
+    df_before = canon.build_canon_frame(
+        day_30min,
+        [0.5] * len(day_30min),
+        nmi="Q",
+        channel="E1",
+        flow="grid_import",
+        cadence_min=30,
+    )
+
+    received_kwargs: list[dict] = []
+
+    def fake_estimate_costs(bill, plan, **kwargs):
+        received_kwargs.append(kwargs)
+        return pl.DataFrame(
+            {
+                "month": ["2025-01"],
+                "energy_cost": [100.0],
+                "demand_cost": [0.0],
+                "fixed_cost": [23.45],
+                "feed_in_credit": [0.0],
+                "total": [123.45],
+            }
+        )
+
+    monkeypatch.setattr(scenario.pricing, "estimate_costs", fake_estimate_costs, raising=True)
+
+    plan = mdtypes.Plan(usage_bands=[], fixed_c_per_day=0.0, feed_in_c_per_kwh=0.0, demand=None)
+
+    scenario.run(
+        df_before,
+        plan=plan,
+        pay_on_time_discount=0.05,
+        include_gst=True,
+        gst_rate=0.15,
+    )
+
+    assert len(received_kwargs) == 2  # once for cost_before, once for cost_after
+    for kwargs in received_kwargs:
+        assert kwargs["pay_on_time_discount"] == 0.05
+        assert kwargs["include_gst"] is True
+        assert kwargs["gst_rate"] == 0.15
+
+
 # ---------------------------------------------------------------------------
 # Regression: multi-flow df must not double scenario totals
 # ---------------------------------------------------------------------------

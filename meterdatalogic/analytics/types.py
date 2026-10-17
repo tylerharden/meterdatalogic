@@ -1,7 +1,7 @@
 """TypedDicts and Pydantic models for analytics outputs."""
 
 from __future__ import annotations
-from typing import TypedDict, Literal, Optional, List, Dict
+from typing import TypedDict, Literal, List, Dict
 from dataclasses import dataclass
 
 import polars as pl
@@ -26,7 +26,7 @@ class SummaryMeta(TypedDict):
 
 class SummaryPeaks(TypedDict, total=False):
     max_interval_kwh: float
-    max_interval_time: Optional[str]
+    max_interval_time: str | None
 
 
 class SummaryBase(TypedDict, total=False):
@@ -52,7 +52,7 @@ class SummaryStats(TypedDict, total=False):
     solar_export_kwh: float
     per_day_avg_kwh: float
     peak_consumption_kw: float
-    peak_time: Optional[str]
+    peak_time: str | None
     peaks: SummaryPeaks
     base: SummaryBase
     windows: Dict[str, WindowStat]
@@ -126,7 +126,7 @@ class Plan(BaseModel):
 
     usage_bands: list[ToUBand]
     feed_in_c_per_kwh: float = 0.0
-    demand: Optional[DemandCharge] = None
+    demand: DemandCharge | None = None
     fixed_c_per_day: float = 0.0
 
 
@@ -139,7 +139,7 @@ class ScenarioDelta(TypedDict, total=False):
     import_kwh_delta: float
     export_kwh_delta: float
     total_kwh_delta: float
-    cost_total_delta: Optional[float]
+    cost_total_delta: float | None
 
 
 class ScenarioExplain(TypedDict, total=False):
@@ -148,7 +148,7 @@ class ScenarioExplain(TypedDict, total=False):
     battery_discharge_kwh: float
     battery_charge_kwh: float
     battery_cycles_est: float
-    pv_self_consumption_pct: Optional[float]
+    pv_self_consumption_pct: float | None
 
 
 class EVConfig(BaseModel):
@@ -168,7 +168,7 @@ class PVConfig(BaseModel):
     system_kwp: float  # DC nameplate
     inverter_kw: float  # AC limit
     loss_fraction: float = 0.15  # wiring/soiling/etc.
-    seasonal_scale: Optional[dict[str, float]] = None  # e.g. {"01":1.05,"06":0.9}
+    seasonal_scale: dict[str, float] | None = None  # e.g. {"01":1.05,"06":0.9}
 
 
 class BatteryConfig(BaseModel):
@@ -190,7 +190,7 @@ class ScenarioResult:
     df_after: CanonFrame
     summary_before: SummaryPayload
     summary_after: SummaryPayload
-    cost_before: Optional[pl.DataFrame]
-    cost_after: Optional[pl.DataFrame]
+    cost_before: pl.DataFrame | None
+    cost_after: pl.DataFrame | None
     delta: ScenarioDelta
     explain: ScenarioExplain

@@ -16,6 +16,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 -
 
+## [0.7.0] - 2026-10-17
+
+### Added
+- `analytics.benchmark` module: segmented household peer-group typical-kWh
+  lookup (occupants x aircon type x hot water type), extending the single
+  constant `benchmark_kwh_per_year` concept into something that can produce
+  a per-household "typical range" comparison.
+- `scenario.run()` now accepts `pay_on_time_discount`, `include_gst`, and
+  `gst_rate`, forwarded to both the before/after cost estimates. Callers no
+  longer need to re-derive discount/GST/total on the returned cost tables
+  themselves. Fully backward compatible (new params are optional, defaults
+  match prior behaviour).
+- `transform.single_window_stat()`: convenience wrapper for "average-day
+  profile + one named time window + one metric", replacing three
+  independent reimplementations of the same pattern across the insights
+  evaluators.
+- `core.utils.annual_total_cost()`: shared helper for summing a cost table
+  to an annual total, replacing two independently-named duplicate
+  implementations in the insights evaluators.
+
+### Changed
+- Standardised `Optional[X]` to `X | None` in `scenario.py` and
+  `analytics/types.py`.
+
+### Fixed
+- `pricing.py`: removed a duplicated `_days_from_label` helper (was defined
+  twice, identically).
+- `summary.summarise()` no longer silently swallows insight-generation
+  errors; failures are now logged at warning level with a traceback.
+- Removed ~13 unnecessary `# type: ignore[arg-type]` comments on insight
+  `severity=` assignments by properly typing the one case that needed it.
+
 ## [0.6.0] - 2026-07-14
 
 ### Added
