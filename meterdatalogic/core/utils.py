@@ -67,3 +67,18 @@ def daily_total_from_profile(profile: CanonFrame) -> float:
     if profile.is_empty() or "import_total" not in profile.columns:
         return 0.0
     return float(profile["import_total"].sum())
+
+
+def annual_total_cost(d: pl.DataFrame | None) -> float:
+    """Sum a cost/billables table to a single annual total.
+
+    Uses the 'total' column when present (cost-engine output); otherwise
+    falls back to summing all numeric columns (billables-only tables that
+    have no 'total' column yet).
+    """
+    if d is None or d.is_empty():
+        return 0.0
+    if "total" in d.columns:
+        return float(d["total"].fill_null(0.0).sum())
+    num_cols = [c for c in d.columns if d[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+    return float(sum(d[c].sum() for c in num_cols))

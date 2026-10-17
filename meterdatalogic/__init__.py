@@ -21,7 +21,7 @@ are exposed at the top level for a simple, flat API.
 # Flat public API - all modules accessible at top level
 from .io import formats, ingest, validate
 from .core import canon, transform, utils
-from .analytics import pricing, scenario, summary, insights
+from .analytics import pricing, scenario, summary, insights, benchmark
 from . import config, types
 
 __all__ = [
@@ -37,4 +37,5 @@ __all__ = [
     "pricing",
     "scenario",
     "insights",
+    "benchmark",
 ]

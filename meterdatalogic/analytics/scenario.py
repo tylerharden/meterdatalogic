@@ -3,7 +3,6 @@
 from __future__ import annotations
 import math
 from collections import defaultdict
-from typing import Optional
 import polars as pl
 
 from ..analytics import pricing
@@ -155,14 +154,22 @@ def _apply_battery_self_consume(
 def run(
     df: CanonFrame,
     *,
-    ev: Optional[EVConfig] = None,
-    pv: Optional[PVConfig] = None,
-    battery: Optional[BatteryConfig] = None,
-    plan: Optional[Plan] = None,
+    ev: EVConfig | None = None,
+    pv: PVConfig | None = None,
+    battery: BatteryConfig | None = None,
+    plan: Plan | None = None,
+    pay_on_time_discount: float = 0.0,
+    include_gst: bool = False,
+    gst_rate: float | None = None,
 ) -> ScenarioResult:
     """
     Simulate EV, PV, and Battery against baseline load. Returns before/after DataFrames,
     summaries, optional cost tables, and deltas.
+
+    pay_on_time_discount, include_gst, and gst_rate are forwarded to both the
+    before and after cost estimates (see pricing.estimate_costs), so callers
+    don't need to re-derive discount/GST/total themselves on the returned
+    cost tables.
     """
     validate.assert_canon(df)
 
@@ -275,9 +282,21 @@ def run(
     cost_before = cost_after = None
     if plan is not None:
         bill_b = pricing.compute_billables(df, plan, mode="monthly")
-        cost_before = pricing.estimate_costs(bill_b, plan)
+        cost_before = pricing.estimate_costs(
+            bill_b,
+            plan,
+            pay_on_time_discount=pay_on_time_discount,
+            include_gst=include_gst,
+            gst_rate=gst_rate,
+        )
         bill_a = pricing.compute_billables(df_after, plan, mode="monthly")
-        cost_after = pricing.estimate_costs(bill_a, plan)
+        cost_after = pricing.estimate_costs(
+            bill_a,
+            plan,
+            pay_on_time_discount=pay_on_time_discount,
+            include_gst=include_gst,
+            gst_rate=gst_rate,
+        )
 
     flow_before = utils.compute_flow_totals(df)
     flow_after = utils.compute_flow_totals(df_after) if len(df_after) else {}

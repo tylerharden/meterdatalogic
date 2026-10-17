@@ -1,6 +1,7 @@
 """Summarise meter data into a structured SummaryPayload dict."""
 
 from __future__ import annotations
+import logging
 from typing import Literal
 
 import polars as pl
@@ -10,6 +11,8 @@ from ..core import transform, utils, canon
 from ..core.types import CanonFrame
 from .types import SeriesBreakdown, SummaryPayload, SummaryPeaks
 from . import insights as insights_mod
+
+logger = logging.getLogger(__name__)
 
 
 def _profile_kw_stat(
@@ -259,6 +262,6 @@ def summarise(
             for i in _ins
         ]
     except Exception:
-        pass
+        logger.warning("Insight generation failed; summary will have no insights.", exc_info=True)
 
     return payload

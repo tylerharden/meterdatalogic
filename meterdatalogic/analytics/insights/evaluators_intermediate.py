@@ -8,7 +8,7 @@ import polars as pl
 from .types import Insight, InsightContext
 from .config import InsightConfig
 from ...core.types import CanonFrame
-from ...core import transform
+from ...core import transform, utils
 
 
 def seasonal_variation(
@@ -55,7 +55,7 @@ def seasonal_variation(
                 f"Usage is notably higher in {season} (≈{diff_pct:.0f}% difference). "
                 "Consider efficiency or shifting peak-time loads in that season."
             ),
-            severity="notice",  # type: ignore[arg-type]
+            severity="notice",
             metrics={"diff_pct": float(diff_pct), "warm_kwh": warm, "cool_kwh": cool},
         )
     return None
@@ -70,17 +70,7 @@ def tariff_suitability(
     if pricing.current_plan not in pricing.costs_by_plan:
         return None
 
-    def _annual_total(d: pl.DataFrame) -> float:
-        if d.is_empty():
-            return 0.0
-        if "total" in d.columns:
-            return float(d["total"].fill_null(0.0).sum())
-        num_cols = [
-            c for c in d.columns if d[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
-        ]
-        return float(sum(d[c].sum() for c in num_cols))
-
-    costs = {name: _annual_total(df_) for name, df_ in pricing.costs_by_plan.items()}
+    costs = {name: utils.annual_total_cost(df_) for name, df_ in pricing.costs_by_plan.items()}
     if not costs:
         return None
     current_cost = float(costs.get(pricing.current_plan, 0.0))
@@ -112,7 +102,7 @@ def tariff_suitability(
                 f"Switching from {pricing.current_plan} to {best_alt_name} could save "
                 f"about ${saving:,.0f}/yr (~{saving_pct:.0f}%)."
             ),
-            severity="notice",  # type: ignore[arg-type]
+            severity="notice",
             metrics={
                 "current_annual_cost": current_cost,
                 "best_alt_annual_cost": best_alt_cost,
@@ -156,7 +146,7 @@ def peak_demand_characteristics(
                 "Short, sharp peaks in the demand window increase risk under demand tariffs. "
                 "Smoothing or shifting peak loads could improve suitability."
             ),
-            severity="warning",  # type: ignore[arg-type]
+            severity="warning",
             metrics={"mean_peak_kw": mean_kw, "p95_peak_kw": p95_kw, "spiky_ratio": ratio},
         )
     return Insight(
@@ -165,6 +155,6 @@ def peak_demand_characteristics(
         category="tariff",
         title="Stable peak demand profile",
         message="Peak demand within the window appears relatively stable rather than spiky.",
-        severity="info",  # type: ignore[arg-type]
+        severity="info",
         metrics={"mean_peak_kw": mean_kw, "p95_peak_kw": p95_kw, "spiky_ratio": ratio},
     )

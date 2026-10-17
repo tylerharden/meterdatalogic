@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .types import Insight, InsightContext
+from .types import Insight, InsightContext, InsightSeverity
 from .config import InsightConfig
 from ...core.types import CanonFrame
-from ...core import transform, utils, canon
+from ...core import transform, canon
 
 
 def usage_vs_benchmark(
@@ -29,7 +29,7 @@ def usage_vs_benchmark(
     if bench <= 0:
         return None
     diff_pct = ((annualised - bench) / bench) * 100.0
-    sev: str = "info"
+    sev: InsightSeverity = "info"
     title = "Usage close to benchmark"
     msg = f"Estimated annual usage ~{annualised:,.0f} kWh vs benchmark {bench:,.0f} kWh (Δ {diff_pct:+.0f}%)."
     if diff_pct >= config.basic.high_usage_pct_threshold:
@@ -49,7 +49,7 @@ def usage_vs_benchmark(
         category="usage",
         title=title,
         message=msg,
-        severity=sev,  # type: ignore[arg-type]
+        severity=sev,
         metrics={
             "annualised_kwh": float(annualised),
             "benchmark_kwh": bench,
@@ -63,22 +63,12 @@ def peak_time_bias(
 ) -> Optional[Insight]:
     if df.is_empty():
         return None
-    prof = transform.profile(df, by="slot", reducer="mean", include_import_total=True)
-    total_daily_kwh = utils.daily_total_from_profile(prof)
-    windows = [
-        {
-            "key": "peak",
-            "start": config.basic.peak_window_start,
-            "end": config.basic.peak_window_end,
-        }
-    ]
-    win = transform.window_stats_from_profile(
-        prof,
-        windows,
-        canon.infer_cadence_minutes(df["t_start"]),
-        total_daily_kwh,
+    share = transform.single_window_stat(
+        df,
+        start=config.basic.peak_window_start,
+        end=config.basic.peak_window_end,
+        metric="share_of_daily_pct",
     )
-    share = float(win.get("peak", {}).get("share_of_daily_pct", 0.0))
     if share >= config.basic.peak_share_high_pct:
         return Insight(
             id="peak_time_bias",
@@ -90,7 +80,7 @@ def peak_time_bias(
                 f"{config.basic.peak_window_start} and {config.basic.peak_window_end}. "
                 "Shifting flexible loads to off-peak times could reduce bills."
             ),
-            severity="warning",  # type: ignore[arg-type]
+            severity="warning",
             metrics={"peak_share_pct": share},
         )
     return Insight(
@@ -102,7 +92,7 @@ def peak_time_bias(
             f"Around {share:.0f}% of daily usage falls in the "
             f"{config.basic.peak_window_start} to {config.basic.peak_window_end} window."
         ),
-        severity="info",  # type: ignore[arg-type]
+        severity="info",
         metrics={"peak_share_pct": share},
     )
 
@@ -130,7 +120,7 @@ def data_completeness(
             category="data_quality",
             title="Incomplete data coverage",
             message=f"Data coverage is about {coverage:.0f}% over the observed period; insights may be less reliable.",
-            severity="warning",  # type: ignore[arg-type]
+            severity="warning",
             metrics={"coverage_pct": float(coverage)},
         )
     return Insight(
@@ -139,6 +129,6 @@ def data_completeness(
         category="data_quality",
         title="Good data coverage",
         message=f"Coverage is ~{coverage:.0f}% across {days} days; insights based on solid data.",
-        severity="info",  # type: ignore[arg-type]
+        severity="info",
         metrics={"coverage_pct": float(coverage)},
     )

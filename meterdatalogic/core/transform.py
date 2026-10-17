@@ -5,6 +5,7 @@ import polars as pl
 from typing import Literal, Iterable, Sequence
 
 from . import utils
+from . import canon
 from .types import CanonFrame
 
 
@@ -453,6 +454,31 @@ def window_stats_from_profile(
             "share_of_daily_pct": float(share),
         }
     return out
+
+
+def single_window_stat(
+    df: CanonFrame,
+    *,
+    start: str,
+    end: str,
+    metric: Literal["share_of_daily_pct", "kwh_per_day", "avg_kw"] = "share_of_daily_pct",
+) -> float:
+    """Convenience wrapper: average-day profile + one named time window + one metric.
+
+    Builds the average-day profile, infers cadence, and computes window stats for
+    a single [start, end) window in one call. Useful anywhere only one window's
+    worth of one metric is needed (most insight evaluators), instead of each
+    caller re-deriving the profile and window_stats_from_profile call itself.
+    """
+    if df.is_empty():
+        return 0.0
+    prof = profile(df, by="slot", reducer="mean", include_import_total=True)
+    total_daily_kwh = utils.daily_total_from_profile(prof)
+    cadence_min = canon.infer_cadence_minutes(df["t_start"])
+    stats = window_stats_from_profile(
+        prof, [{"key": "_single", "start": start, "end": end}], cadence_min, total_daily_kwh
+    )
+    return float(stats.get("_single", {}).get(metric, 0.0))
 
 
 def period_breakdown(

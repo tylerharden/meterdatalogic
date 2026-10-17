@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import bisect
+import datetime as _dt
 import polars as pl
 from typing import Iterable, Tuple, Literal, Optional
 
@@ -11,13 +12,19 @@ from ..core.types import CanonFrame
 from ..analytics.types import Plan
 
 
+def _days_from_label(lbl: str) -> int:
+    """Return the inclusive day count spanned by a '<start>\u2192<end>' cycle label."""
+    s_str, e_str = lbl.split("\u2192")
+    s = _dt.date.fromisoformat(s_str)
+    e = _dt.date.fromisoformat(e_str)
+    return int((e - s).days) + 1
+
+
 def _label_cycles(
     t_start: pl.Series,
     cycles: Iterable[Tuple[str | object, str | object]],
 ) -> pl.Series:
     """Assign each timestamp to a [start, end) cycle label, or null if outside all cycles."""
-    import datetime as _dt
-
     tz = t_start.dtype.time_zone
     if tz is None:
         raise ValueError("t_start must be tz-aware.")
@@ -161,14 +168,6 @@ def _cycle_billables(
     out = out.with_columns([pl.col(c).fill_null(0.0) for c in num_cols])
 
     # ---- EXACT DAY COUNTS ----
-    def _days_from_label(lbl: str) -> int:
-        import datetime as _dt
-
-        s_str, e_str = lbl.split("→")
-        s = _dt.date.fromisoformat(s_str)
-        e = _dt.date.fromisoformat(e_str)
-        return int((e - s).days) + 1
-
     days_list = [_days_from_label(str(lbl)) for lbl in out["cycle"].to_list()]
     out = out.with_columns(pl.Series(days_list, dtype=pl.Int32).alias("days_in_cycle"))
     return out
@@ -331,15 +330,6 @@ def estimate_costs(
     # Fixed cost (days in period)
     if "cycle" in out.columns:
         if "days_in_cycle" not in out.columns:
-
-            def _days_from_label(lbl: str) -> int:
-                import datetime as _dt
-
-                s_str, e_str = lbl.split("→")
-                s = _dt.date.fromisoformat(s_str)
-                e = _dt.date.fromisoformat(e_str)
-                return int((e - s).days) + 1
-
             days_list = [_days_from_label(str(lbl)) for lbl in out["cycle"].to_list()]
             out = out.with_columns(pl.Series(days_list, dtype=pl.Float64).alias("days_in_cycle"))
         days_expr = pl.col("days_in_cycle").cast(pl.Float64).fill_null(0.0)
